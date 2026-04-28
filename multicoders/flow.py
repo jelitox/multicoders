@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from .arena import Arena, ArenaVerdict
 from .dispatcher import Candidate, Dispatcher
+from .qa import QANode, QAReport
 from .research import ResearchNode
 from .storage import Storage
 
@@ -24,6 +25,7 @@ class RoundResult:
     verdicts: List[ArenaVerdict]
     final_status: str
     winner: Optional[Candidate]
+    qa_report: Optional[QAReport] = None
 
 
 class MulticodersFlow:
@@ -33,12 +35,14 @@ class MulticodersFlow:
         dispatcher: Dispatcher,
         arena: Arena,
         research_node: Optional[ResearchNode] = None,
+        qa_node: Optional[QANode] = None,
         max_retries: int = 2,
     ) -> None:
         self.storage = storage
         self.dispatcher = dispatcher
         self.arena = arena
         self.research_node = research_node or ResearchNode(storage)
+        self.qa_node = qa_node or QANode(storage)
         self.max_retries = max_retries
 
     def run(self, prompt: str, payload: Optional[Dict[str, Any]] = None) -> RoundResult:
@@ -67,14 +71,18 @@ class MulticodersFlow:
 
             winner = self._pick_winner(last_candidates, last_verdicts)
             if winner is not None:
-                self.storage.update_task_status(task_id, "completed")
-                return RoundResult(
-                    task_id=task_id,
-                    candidates=last_candidates,
-                    verdicts=last_verdicts,
-                    final_status="completed",
-                    winner=winner,
-                )
+                qa_report = self.qa_node.check(task_id, winner)
+                if qa_report.passed:
+                    self.storage.update_task_status(task_id, "completed")
+                    return RoundResult(
+                        task_id=task_id,
+                        candidates=last_candidates,
+                        verdicts=last_verdicts,
+                        final_status="completed",
+                        winner=winner,
+                        qa_report=qa_report,
+                    )
+                # QA rejected: retry as if Arena had failed.
             attempt += 1
 
         self.storage.update_task_status(task_id, "needs_human")

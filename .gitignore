@@ -14,3 +14,4 @@ htmlcov/
 *.db-shm
 *.db-wal
 *.log
+_refs/

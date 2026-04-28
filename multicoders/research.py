@@ -24,17 +24,34 @@ class ResearchNode:
         self.storage = storage
 
     def enrich(self, task_id: str, prompt: str) -> ResearchContext:
-        # In the future, this will call Parrot's search tools, read codebase,
-        # or parse Jira tickets. For now, it's a structural pass-through.
-        enriched_prompt = (
-            f"Context: Ensure deterministic execution.\n"
-            f"Task: {prompt}\n"
-            f"Constraints: Use standard libraries where possible. Pass ast.parse."
-        )
-        metadata = {"source": "local", "complexity": "unknown"}
+        import os
+        from pathlib import Path
         
-        # We don't create the task here, as the Flow already does it.
-        # We just return the enriched data.
+        repo_root = Path("/home/jelitox/repos/labs/multicoders")
+        files = []
+        try:
+            for root, dirs, filenames in os.walk(repo_root):
+                if ".git" in dirs:
+                    dirs.remove(".git")
+                if "__pycache__" in dirs:
+                    dirs.remove("__pycache__")
+                for f in filenames:
+                    files.append(os.path.relpath(os.path.join(root, f), repo_root))
+                if len(files) > 50:
+                    break
+        except Exception:
+            pass
+
+        file_list = "\n".join(f"- {f}" for f in files[:30])
+        
+        enriched_prompt = (
+            f"Context: Deterministic execution in multicoders project.\n"
+            f"Repository Files:\n{file_list}\n"
+            f"Task: {prompt}\n"
+            f"Constraints: Use standard libraries. Pass ast.parse. Follow project conventions."
+        )
+        metadata = {"source": "local", "file_count": len(files), "complexity": "medium" if len(files) > 10 else "low"}
+        
         return ResearchContext(
             task_id=task_id,
             raw_prompt=prompt,
