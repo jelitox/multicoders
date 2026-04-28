@@ -1,0 +1,152 @@
+[26/4/26 9:19 p. m.] Jesús Lara Giménez: Pues, a ver ... creo que estoy trabajando en algo "parecido", pero usando AgentsFlow
+[26/4/26 9:19 p. m.] Jesús Lara Giménez: AgentsFlow node
+      │
+      ▼
+ClaudeCodeDispatcher          ← FEAT-XXX (este brainstorm)
+  · profile + subagent selection
+  · semáforo global
+  · pump de eventos a Redis
+  · validación Pydantic in/out
+  · audit via JournalWriter
+      │ usa
+      ▼
+ClaudeAgentClient             ← FEAT-124 (en curso)
+  · ClaudeAgentRunOptions
+  · ask / ask_stream / invoke / resume
+  · LLMFactory("claude-agent:...")
+      │ wrappea
+      ▼
+claude_agent_sdk
+  · query() / ClaudeSDKClient
+[26/4/26 9:19 p. m.] Jesús Lara Giménez: Te explico:
+[26/4/26 9:21 p. m.] Jesús Lara Giménez: AgentsFlow es un DAG de Agentes, mi idea es la siguiente:
+- un nodo AgentsFlow (un agente Parrot) lee un problema, issue, incidencia, whatever, se le aportan las tools necesarias para sacar logs, extraer evidencias, etc, él es el TRIGGER del Flow
+- el Agente pasa a un Research Agent que define qué problema hay, obtiene logs (e.g. Cloudwatch, Elasticsearch) y genera el ticket Jira asociado al problema con comentario de los findings
+[26/4/26 9:21 p. m.] Jesús Lara Giménez: aquí viene la parte "mágica"
+[26/4/26 9:22 p. m.] Jesús Lara Giménez: Usamos el SDK Claude-Code de Anthropic para disparar un "ClaudeCodeDispatcher"
+[26/4/26 9:22 p. m.] Jesús Lara Giménez: (pero, puede ser el SDK de Codex, da igual)
+[26/4/26 9:23 p. m.] Jesús Lara Giménez: el ClaudeCodeDispatcher puede hacer uso "internamente" de los ya funcionales comandos sdd-task, sdd-start, etc desarrollando de manera autónoma el código necesario en un worktree
+[26/4/26 9:24 p. m.] Jesús Lara Giménez: cuando termina, le pasa el testigo a un sdd-qa + code-reviewer, que definen la prueba y generan un artefacto que define si el código sirve o no
+[26/4/26 9:25 p. m.] Jesús Lara Giménez: QA Agent al terminar le devuelve el testigo a un Agente Parrot del Flow, que actualiza el Jira con los resultados (buenos o malos), si son buenos, genera PR a main, si son malos, publica findings con arroba al ticket.assignee para que el humano retome dónde la IA lo dejó
+[26/4/26 9:25 p. m.] Jesús Lara Giménez: en este caso estaremos usando la propia infra de Parrot, que incluye redis-streams
+[26/4/26 9:26 p. m.] Jesús Lara Giménez: el flow de Claude Code + el Flow del propio AgentsFlow pintarlo en realtime en una UI
+[26/4/26 9:27 p. m.] Jesús Lara Giménez: mi idea de UI es algo como Bosun
+[26/4/26 9:28 p. m.] Jesús Lara Giménez: Creas un "Flow" escribiendo una incidencia "tarea XYZ de Flowtask falló hoy"
+[26/4/26 9:28 p. m.] Jesús Lara Giménez: y eso "dispara" el DAG Flow que arranca el proceso de verificar si hay que hacer cambios en la tarea de Flowtask
+[26/4/26 9:29 p. m.] Jesús Lara Giménez: Si después más a futuro, pegamos un agente al Redis-Stream del propio Flowtask (si coño, desde hace años flowtask tiene un redis-stream donde publica cuando una tarea se corrió y si corrió bien o en falla)
+[26/4/26 9:30 p. m.] Jesús Lara Giménez: dicho Agente puede ser quien haga trigger del error al Flow
+[26/4/26 9:30 p. m.] Jesús Lara Giménez: convirtiendose esto es un proceso proactivo de resolución de problemas
+[26/4/26 9:34 p. m.] Jesús Lara Giménez: o mejor aún
+[26/4/26 9:34 p. m.] Jesús Lara Giménez: un agente con el RAG de Flowtask, para pedirle vía una UI que genere el YAML de una tarea
+[26/4/26 9:35 p. m.] Jesús Lara Giménez: ese YAML triggea el Flow que usará el YAML para construir la tarea
+[26/4/26 9:35 p. m.] Jesús Lara Giménez: en ese contexto, es obvio que el agente NO PUEDE probar la tarea porque probablemente necesite credenciales a cosas que no tiene
+[26/4/26 9:36 p. m.] Jesús Lara Giménez: pero en casos muy básicos, dónde las credenciales ya estén en el repo, si las podrá probar
+[26/4/26 9:36 p. m.] Jesús Lara Giménez: ¿qué opinas?
+[26/4/26 9:39 p. m.] Jesús Lara Giménez: Agente Flowtask: "Me creas una tarea que haga XYZ?" » entrega a CodeFlow » Se dispara flow que toma el YAML, el research investiga y lo "refina" de acuerdo a spec y documentación de los componentes » crea ticket, asigna a "developer agent" » "developer agent" verifica que YAML es correcto, que se puede correr y hace el worktree en git con la tarea para subirla al repo  » QA Agent verifica que la tarea "se puede correr", que no invoca algún componente mal escrito, etc si de ser posible, la corre si posee un environment de flowtask que le permita correr la tarea (o le doy un tool que le permita despacharla a un worker con "run", que permite correrla "sync" y obtener resultado de la tarea) » QA define que la tarea funciona y hace PR a main + PR del worktree a DEV y etiqueta al reporter para indicarle que terminó
+[26/4/26 9:39 p. m.] Jesús Lara Giménez: ¿está bien ese flujo?
+[26/4/26 9:51 p. m.] Jesús Lara Giménez: al final, AgentsFlow es un DAG
+[26/4/26 9:51 p. m.] Jesús Lara Giménez: puedes hacer un "concurso" dónde el flow en vez de disparar uno, dispara Codex + Claude Code
+[26/4/26 9:52 p. m.] Jesús Lara Giménez: y se debe generar un "round-robin de consenso" entre ambos
+[26/4/26 9:56 p. m.] Jesús Lara Giménez: AgentsFlow ya tiene eso
+[26/4/26 9:57 p. m.] Jesús Lara Giménez: """DecisionFlowNode — Multi-agent decision orchestrator for AgentsFlow workflows.
+
+This module provides a consensus-based decision component that integrates with
+the AgentsFlow FSM system. It enables multi-agent decision-making, voting, and
+escalation to Human-in-the-Loop for critical decisions.
+"""
+[26/4/26 9:57 p. m.] Jesús Lara Giménez: de hecho, se soportan 3 tipos de decisiones:
+[26/4/26 9:57 p. m.] Jesús Lara Giménez: class DecisionMode(str, Enum):
+    """Operating mode for decision-making process."""
+
+    CIO = "cio"  # Single coordinator, can escalate to HITL
+    BALLOT = "ballot"  # Multi-agent voting with optional weights
+    CONSENSUS = "consensus"  # Agents read each other's decisions, coordinator synthesizes
+[26/4/26 9:58 p. m.] Jesús Lara Giménez: CIO: cada agente le dice a un CIO lo que encontró, CIO toma la decisión y se basa en los findings/respuestas de los agentes para tomar una decisión
+[26/4/26 9:59 p. m.] Jesús Lara Giménez: BALLOT = cada agente del flujo vota entre las decisiones (y la pondera), nota: solo sirve si los agentes no son pares
+CONSENSUS: los agentes realizan cross-pollinization de su información con los otros, el CIO coordinator solo la "sintetiza" y llegan a un consenso
+[26/4/26 9:59 p. m.] Jesús Lara Giménez: AgentsFlow se componente de agentes parrot
+[26/4/26 9:59 p. m.] Jesús Lara Giménez: y cada agente parrot se instancia con un LLM distinto
+[26/4/26 10:04 p. m.] Jesús Lara Giménez: el unico peo?, a diferencia de AgentCrew (que fue la primera iteración de crews de agentes, con simples flujos directos)
+[26/4/26 10:04 p. m.] Jesús Lara Giménez: AgentsFlow es un DAG con Finite-Machine state, session y Flow tipo DAG como Flowtask
+[26/4/26 10:05 p. m.] Jesús Lara Giménez: y NO TIENE UI
+[26/4/26 10:05 p. m.] Jesús Lara Giménez: solo se pueden crear programáticamente porque no hemos creado un handler que los traduzca de JSON a code
+[26/4/26 10:05 p. m.] Jesús Lara Giménez: (como si existe de AgentsCrew)
+[26/4/26 10:20 p. m.] Jesús Lara Giménez:     # 1. Tres sintetizadores con LLMs distintos
+    claude_synth = build_synthesizer(
+        "claude_synth", use_llm="anthropic", model="claude-opus-4-5", source_path=source_path
+    )
+    gemini_synth = build_synthesizer(
+        "gemini_synth", use_llm="google", model="gemini-2.5-pro", source_path=source_path
+    )
+    grok_synth = build_synthesizer(
+        "grok_synth", use_llm="grok", model="grok-4", source_path=source_path
+    )
+    for ag in (claude_synth, gemini_synth, grok_synth):
+        crew.add_agent(ag)
+
+    # 2. DecisionFlowNode en modo BALLOT con tres jueces
+    judges = {
+        "claude_judge": build_judge("claude_judge", "anthropic", "claude-opus-4-5"),
+        "gemini_judge": build_judge("gemini_judge", "google", "gemini-2.5-pro"),
+        "grok_judge": build_judge("grok_judge", "grok", "grok-4"),
+    }
+[26/4/26 10:20 p. m.] Jesús Lara Giménez: fijate, se crean 3 agentes en 3 LLMs distintos (ojo, también tenemos NVIDIA Client para acceder a nemotron free)
+[26/4/26 10:21 p. m.] Jesús Lara Giménez: y un ballot de 3 jueces, cada uno "juzga" el trabajo de su homonimo
+[26/4/26 10:21 p. m.] Jesús Lara Giménez: y el flujo de decisión es:
+[26/4/26 10:21 p. m.] Jesús Lara Giménez:     consensus_node = DecisionFlowNode(
+        name="consensus_decision",
+        agents=judges,
+        config=DecisionNodeConfig(
+            mode=DecisionMode.BALLOT,
+            decision_type=DecisionType.MULTI_CHOICE,
+            decision_schema=SynthesisVote,
+            options=[
+                {"key": "claude", "label": "Síntesis de Claude Opus"},
+                {"key": "gemini", "label": "Síntesis de Gemini Pro"},
+                {"key": "grok", "label": "Síntesis de Grok"},
+            ],
+            minimum_votes=2,  # quórum: al menos 2 de 3 jueces
+        ),
+    )
+[26/4/26 10:22 p. m.] Jesús Lara Giménez: los 3 jueces votan y queda el que lleve 2 de 3
+[26/4/26 10:22 p. m.] Jesús Lara Giménez: crew.task_flow(
+        source=consensus_node,
+        targets=writer,
+        condition=TransitionCondition.ON_SUCCESS,
+        prompt_builder=build_writer_prompt,
+    )
+[26/4/26 10:22 p. m.] Jesús Lara Giménez: el ultimo nodo del flow solo existe para recibir el documento que se votó a favor y mandarlo a disco duro
+[26/4/26 10:29 p. m.] Jesús Lara Giménez: y así se ve el prompt de ejecución:
+[26/4/26 10:30 p. m.] Jesús Lara Giménez: --- Resultado del flujo ---
+Status     : completed
+Completados: ['start', 'claude_synth', 'gemini_synth', 'grok_synth', 'writer', 'end', 'consensus_decision']
+
+Salida final (writer):
+Task: /home/jesuslara/proyectos/navigator/ai-parrot/docs/documentdb_interface.md
+
+Context from previous agents:
+
+--- writer ---
+---
+
+## ✅ Documento de Consenso Creado
+
+Archivo guardado exitosamente:
+- Ruta: /home/jesuslara/proyectos/navigator/ai-parrot/outputs/consensus_synthesis.md
+- Tamaño: 3,524 bytes (3.5 KB)
+- Autor ganador: Claude
+- Confianza del consenso: 90%
+
+El documento incluye:
+1. Encabezado con el autor ganador (Claude)
+2. Preámbulo confirmando el consenso alcanzado
+3. Contenido completo de la síntesis ganadora sobre la Guía de la Interfaz DocumentDB
+4. Todas las secciones preservadas: descripción general, inicialización, colecciones, indexación, streaming, guardado en segundo plano, ejemplo completo y características clave
+[26/4/26 10:31 p. m.] Jesús Lara Giménez: por si querías ver, hay un log de por qué se votó lo que se votó:
+[26/4/26 10:31 p. m.] Jesús Lara Giménez: one search_score_threshold=0.7 context_sources=[] source_documents=[] structured_output=SynthesisVote(decision='claude', confidence=0.9, reasoning="Claude's synthesis is the most correct because it provides a clear, concise, and well-structured overview of the DocumentDB interface. It includes all key sections (General Description, Initialization, Collection/Bucket Creation, Indexing, Streaming, Background Saving, Full Example, Key Features) with relevant code snippets and explanations. The use of tables for methods and descriptions, and bullet points for key features, enhances readability and comprehension. It accurately reflects the content and ideas of the original document with good fidelity and completeness.") is_structured=True metadata={} artifacts=[] output_mode=<OutputMode.DEFAULT: 'default'> (confidence=1.00, time=1.93s)
+[INFO] 2026-04-27 03:28:38,300 root(fsm.py:108) :: Agent consensus_decision completed successfully
+[DEBUG] 2026-04-27 03:28:38,301 parrot.crews.fsm.ConsensusSynthesisFlow(fsm.py:1399) :: Stored result for 'consensus_decision' in ExecutionMemory (execution_id=consensus_decision_e8c31ff1)
+[DEBUG] 2026-04-27 03:28:38,301 parrot.crews.fsm.ConsensusSynthesisFlow(fsm.py:1233) :: Scheduled agent 'writer' via transition from 'consensus_decision'
+[DEBUG] 2026-04-27 03:28:38,302 root(fsm.py:104) :: Agent writer started execution
+[INFO] 2026-04-27 03:28:38,302 parrot.crews.fsm.ConsensusSynthesisFlow(fsm.py:1326) :: Auto-configuring agent 'writer'
+[26/4/26 10:32 p. m.] Jesús Lara Giménez: todo el flow de reasoning vote tomó 1.9 segundos y consumió total_tokens=6059

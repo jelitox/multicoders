@@ -1,0 +1,19 @@
+[Unit]
+Description=multicoders Telegram-backed orchestration service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jelitox/repos/labs/multicoders
+EnvironmentFile=/home/jelitox/repos/labs/multicoders/.env
+Environment=HOME=/home/jelitox
+Environment=NO_BROWSER=true
+Environment=PATH=/home/jelitox/.nvm/versions/node/v20.19.4/bin:/home/jelitox/.local/bin:/home/jelitox/.pyenv/versions/3.11.13/bin:/usr/local/bin:/usr/bin:/bin
+UnsetEnvironment=GEMINI_API_KEY GOOGLE_API_KEY GOOGLE_CLOUD_PROJECT GOOGLE_CLOUD_PROJECT_ID GOOGLE_GENAI_USE_VERTEXAI
+ExecStart=/home/jelitox/.pyenv/versions/3.11.13/bin/python3 -m multicoders service --db-file /home/jelitox/.local/state/multicoders/service.db --telegram-state-file /home/jelitox/.local/state/multicoders/telegram-state.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

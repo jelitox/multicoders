@@ -1,0 +1,19 @@
+[project]
+name = "multicoders"
+version = "0.1.0"
+description = "Deterministic Agent Orchestration based on ai-parrot"
+authors = [
+    { name = "Jelitox", email = "jelitox@example.com" }
+]
+dependencies = [
+    "ai-parrot @ file:///home/jelitox/repos/labs/multicoders/_refs/ai-parrot/packages/ai-parrot",
+    "sqlite3-api",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["multicoders*"]
