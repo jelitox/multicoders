@@ -37,6 +37,7 @@ class MulticodersFlow:
         qa_node: Optional[QANode] = None,
         max_retries: int = 2,
         memory: Optional[MemoryService] = None,
+        profile: Optional[Any] = None,
     ) -> None:
         self.storage = storage
         self.dispatcher = dispatcher
@@ -45,6 +46,12 @@ class MulticodersFlow:
         self.qa_node = qa_node or QANode(storage)
         self.max_retries = max_retries
         self.memory = memory
+        # Optional DomainProfile makes the pipeline domain-agnostic: when set it
+        # drives the arena objective filter and replaces the code QA gate with
+        # the profile's validators. Defaults to the code domain (QANode).
+        self.profile = profile
+        if profile is not None:
+            self.arena.profile = profile
 
     def run(self, prompt: str, payload: Optional[Dict[str, Any]] = None) -> RoundResult:
         task_id = str(uuid.uuid4())
@@ -94,7 +101,15 @@ class MulticodersFlow:
             if winner is None:
                 continue
 
-            qa_report = self.qa_node.check(task_id, winner)
+            if self.profile is not None:
+                outcome = self.profile.validate(winner.content, workdir=winner.workdir)
+                qa_report = QAReport(
+                    artifact_id=winner.artifact_id,
+                    passed=outcome.passed,
+                    reason=outcome.reason,
+                )
+            else:
+                qa_report = self.qa_node.check(task_id, winner)
             self.storage.save_checkpoint(
                 task_id,
                 "qa",

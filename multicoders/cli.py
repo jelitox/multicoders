@@ -71,6 +71,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="AgentBackend kind for real mode (default: parrot). --dry-run forces mock.",
     )
+    parser.add_argument(
+        "--domain",
+        default="code",
+        help="Domain profile driving the objective filter + validators (default: code).",
+    )
     args = parser.parse_args(argv)
     if not args.resume and not args.prompt:
         parser.error("prompt is required unless --resume is used")
@@ -94,10 +99,21 @@ def main(argv: list[str] | None = None) -> int:
 
     coders, judges = _build_agents(backend_kind)
 
+    profile = None
+    if args.domain and args.domain != "code":
+        from .domains import get_profile
+
+        try:
+            profile = get_profile(args.domain)
+        except ValueError as exc:
+            print(f"[!] {exc}")
+            return 2
+        print(f"[*] Domain profile: {profile.name} (artifact: {profile.artifact_kind})")
+
     dispatcher = Dispatcher(storage, coders, worktree_root=args.worktree)
-    arena = Arena(storage, judges)
+    arena = Arena(storage, judges, profile=profile)
     research = ResearchNode(storage)
-    flow = MulticodersFlow(storage, dispatcher, arena, research_node=research)
+    flow = MulticodersFlow(storage, dispatcher, arena, research_node=research, profile=profile)
 
     if args.resume:
         print(f"[*] Resuming task: {args.resume!r}")
