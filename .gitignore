@@ -1,5 +1,7 @@
 __pycache__/
 *.py[cod]
+.venv/
+.uv-cache/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
@@ -8,10 +10,20 @@ __pycache__/
 htmlcov/
 
 .env
+env/
 .multicoders/
 .multicoders-service/
 *.db
 *.db-shm
 *.db-wal
 *.log
-_refs/
+
+# Runtime output / state from both engines
+logs/
+outputs/
+settings/
+.agents/
+
+# Ignore contents of _refs but allow the submodule directory to be tracked
+_refs/*
+!_refs/ai-parrot/
