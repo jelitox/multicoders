@@ -53,6 +53,46 @@ class MemoryService:
             decisions=JsonDecisionMemory(base / "decisions.jsonl"),
         )
 
+    @classmethod
+    def with_knowledge(
+        cls,
+        state_dir: str | Path = ".multicoders",
+        *,
+        repo: str | Path | None = None,
+        pageindex_client: Any = None,
+    ) -> "MemoryService":
+        """Like :meth:`local`, but auto-attaches PageIndex/GraphIndex when present.
+
+        Falls back transparently to the Fase 4a layers when the ai-parrot bump
+        (PageIndex/GraphIndex) is not installed, so callers need no version check.
+        """
+        base = Path(state_dir)
+        json_decisions = JsonDecisionMemory(base / "decisions.jsonl")
+
+        # Episodic: GraphIndex if available, else the JSON store directly.
+        from .graphindex import GraphIndexEpisodicMemory, graphindex_available
+
+        decisions = (
+            GraphIndexEpisodicMemory(json_decisions)
+            if graphindex_available()
+            else json_decisions
+        )
+
+        # Documental: PageIndex tree built from the repo if available.
+        documents = None
+        if repo is not None:
+            from .pageindex import PageIndexDocumentMemory
+
+            documents = PageIndexDocumentMemory.build_from_repo(
+                repo, storage_dir=base / "pageindex", client=pageindex_client
+            )
+
+        return cls(
+            working=InProcessWorkingMemory(),
+            decisions=decisions,
+            documents=documents,
+        )
+
     # ---- working memory --------------------------------------------------
     def stage(self, run_id: str, key: str, value: Any) -> None:
         self.working.stage(run_id, key, value)

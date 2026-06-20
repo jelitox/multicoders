@@ -14,6 +14,8 @@ from .base import (
     WorkingMemoryLayer,
 )
 from .decision import JsonDecisionMemory
+from .graphindex import GraphIndexEpisodicMemory, graphindex_available
+from .pageindex import PageIndexDocumentMemory, pageindex_available
 from .service import MemoryService
 from .working import InProcessWorkingMemory
 
@@ -26,4 +28,8 @@ __all__ = [
     "DocumentMemoryLayer",
     "InProcessWorkingMemory",
     "JsonDecisionMemory",
+    "PageIndexDocumentMemory",
+    "pageindex_available",
+    "GraphIndexEpisodicMemory",
+    "graphindex_available",
 ]
