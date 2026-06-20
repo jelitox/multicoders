@@ -88,6 +88,56 @@ point available. The installed `ai-parrot` version exposes a different
 now executes its node handlers sequentially instead of constructing obsolete
 `FlowNode(name=..., handler=...)` instances.
 
+## Provider-Agnostic Backends (`multicoders/backends/`)
+
+A single `AgentBackend` protocol (`name`, `capabilities()`, `health()`,
+`generate(TaskSpec, AgentContext) -> Artifact`) lets both engines consume agents
+uniformly. Variants:
+
+- `ParrotBackend` — in-process `parrot.bots` agents.
+- `CliBackend` — the official provider CLI in the user's own authenticated
+  session (BYO-auth). Strips provider API-key env vars before invoking so a
+  subscription session is never silently billed as API usage; never proxies or
+  pools tokens. Wraps the same `providers.run_provider` the council uses.
+- `ApiBackend` — provider API keys (pay-per-token); opt-in only, never an
+  automatic fallback.
+- `LocalBackend` — local models via an Ollama-compatible endpoint.
+- `MockBackend` — deterministic, for dry-run/tests.
+
+`BackendCoder`/`BackendJudge` adapters bridge any backend onto the existing
+`Dispatcher`/`Arena` interfaces. The arena CLI exposes `--backend {parrot,cli,mock}`.
+Resolution (`resolver.py`) honours an explicit order + capability + health and
+never auto-inserts a billed backend.
+
+## Layered Memory (`multicoders/memory/`)
+
+`MemoryService` turns "single storage" into a memory stack. The SQLite ledger
+stays transactional; context and learning live in layers:
+
+- working — `InProcessWorkingMemory`, per-run phase staging (Fase 4a).
+- decisions — `JsonDecisionMemory`, durable cross-run episodic recall by token
+  overlap (Fase 4a); upgraded to `GraphIndexEpisodicMemory` when GraphIndex is
+  present (Fase 4b).
+- documents — `PageIndexDocumentMemory`, grounds research via `retrieve()`
+  instead of the `os.walk` file dump (Fase 4b).
+
+The PageIndex/GraphIndex layers are feature-detected: they report
+`available() == False` on the current ai-parrot pin and activate automatically
+once the submodule is bumped (the pin lacks `parrot.knowledge.pageindex/graphindex`).
+
+## Domain Profiles (`multicoders/domains/`)
+
+A `DomainProfile` (objective filter + validators + artifact kind) makes the
+pipeline domain-agnostic; only the profile swaps:
+
+- `CodeProfile` — `ast.parse` filter; security/compile/doctest validators.
+- `ProcessProfile` — non-code proof: JSON administrative/ops workflows; schema +
+  business-rule validators with an HITL `needs_human` flag.
+
+`Arena.objective_filter` and `MulticodersFlow`'s winner gate delegate to the
+profile when set (default `None` keeps the code behavior). The arena CLI exposes
+`--domain`.
+
 ## Persistence Model
 
 SQLite schema lives in `multicoders/schema.sql`.
