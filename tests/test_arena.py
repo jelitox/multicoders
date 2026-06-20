@@ -1,85 +1,102 @@
-import sys
-import pytest
-from pathlib import Path
-from unittest.mock import MagicMock
+"""Tests for the real Arena consensus engine.
 
-# Ensure we can import from multicoders
-sys.path.append(str(Path(__file__).parent.parent))
+These exercise the current ``multicoders.arena.Arena`` API (judges that vote
+on candidates with majority consensus), not the obsolete ``ArenaNode`` /
+Parrot ``DecisionNode`` wrapper that earlier versions shipped.
+"""
+from __future__ import annotations
 
-from multicoders.arena import ArenaNode
-# We don't need real parrot if we mock carefully, but let's try to use the path
-PARROT_SRC = Path(__file__).parent.parent / "_refs/ai-parrot/packages/ai-parrot/src"
-if str(PARROT_SRC) not in sys.path:
-    sys.path.append(str(PARROT_SRC))
+import asyncio
+import os
+import tempfile
+from typing import Dict, List, Tuple
 
-try:
-    from parrot.bots.flow.decision_node import DecisionNodeConfig, DecisionMode, DecisionType
-except ImportError:
-    # Mocking for the test if parrot src is not perfectly aligned
-    class DecisionMode: BALLOT = "ballot"
-    class DecisionType: APPROVAL = "approval"
-    class DecisionNodeConfig:
-        def __init__(self, **kwargs): 
-            for k,v in kwargs.items(): setattr(self, k, v)
+from multicoders.arena import Arena
+from multicoders.dispatcher import Candidate
+from multicoders.storage import Storage
 
-@pytest.mark.asyncio
-async def test_arena_node_filters_author():
-    # Mock agents
-    claude = MagicMock()
-    gemini = MagicMock()
-    codex = MagicMock()
-    
-    agents = {
-        "claude": claude,
-        "gemini": gemini,
-        "codex": codex
-    }
-    
-    config = DecisionNodeConfig(
-        mode=DecisionMode.BALLOT,
-        decision_type=DecisionType.APPROVAL
-    )
-    
-    node = ArenaNode(name="test_arena", agents=agents, config=config)
-    
-    # Mock super().ask to see what agents were left
-    # In a real test we'd need to mock DecisionFlowNode._execute_ballot_mode
-    node._execute_ballot_mode = MagicMock(return_value=MagicMock())
-    
-    # Author is 'claude'
-    ctx = {
-        "dispatcher_result": {"author": "claude"}
-    }
-    
-    # We need to mock _execute_ballot_mode because super().ask calls it
-    # For simplicity in this test, let's just check if 'claude' is removed
-    
-    # Instead of calling ask (which involves more parrot machinery), 
-    # let's test the filtering logic specifically if we extracted it, 
-    # or just run it and catch the agents.
-    
-    original_ask = ArenaNode.ask
-    
-    async def mock_ask(self, question, **ctx):
-        # This mirrors the logic in ArenaNode.ask
-        dispatcher_result = ctx.get("dispatcher_result", {})
-        author = dispatcher_result.get("author", "unknown")
-        
-        if author in self.agents:
-            del self.agents[author]
-        
-        return self.agents.keys()
 
-    # Apply the mock to the instance for this test
-    import types
-    node.ask = types.MethodType(mock_ask, node)
-    
-    judges = await node.ask("Is this code good?", **ctx)
-    
-    assert "claude" not in judges
-    assert "gemini" in judges
-    assert "codex" in judges
-    assert len(judges) == 2
+VALID_CODE = "def add(a, b):\n    return a + b\n"
 
-if __name__ == "__main__":
-    pytest.main([__file__])
+
+def _make_storage_with_candidate(tmp_db: str, author: str) -> Tuple[Storage, str, Candidate]:
+    """Create a Storage with one task + one persisted artifact ready to judge."""
+    storage = Storage(db_path=tmp_db)
+    task_id = "task-arena"
+    storage.create_task(task_id, {"prompt": "add two numbers"})
+    artifact_id = storage.add_artifact(task_id, author=author, content=VALID_CODE)
+    candidate = Candidate(artifact_id=artifact_id, author=author, content=VALID_CODE)
+    return storage, task_id, candidate
+
+
+def test_author_judge_is_skipped() -> None:
+    """A judge whose name matches the candidate author must not vote on it."""
+    called: List[str] = []
+
+    def _judge(name: str, vote: str):
+        def _fn(_artifact: Dict) -> Tuple[str, str]:
+            called.append(name)
+            return vote, f"{name} says {vote}"
+
+        return _fn
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "mc.db")
+        storage, task_id, candidate = _make_storage_with_candidate(db_path, author="claude")
+        arena = Arena(
+            storage=storage,
+            judges={
+                "claude": _judge("claude", "reject"),  # author — should be skipped
+                "gemini": _judge("gemini", "approve"),
+                "codex": _judge("codex", "approve"),
+            },
+        )
+
+        verdicts = asyncio.run(arena.run(task_id, [candidate]))
+
+    assert "claude" not in called
+    assert set(called) == {"gemini", "codex"}
+    verdict = verdicts[0]
+    assert verdict.status == "approved"
+    assert verdict.approvals == 2
+    assert verdict.rejections == 0
+
+
+def test_majority_rejection_fails_consensus() -> None:
+    """With the author skipped, a minority approval must not reach consensus."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "mc.db")
+        storage, task_id, candidate = _make_storage_with_candidate(db_path, author="codex")
+        arena = Arena(
+            storage=storage,
+            judges={
+                "claude": lambda _a: ("approve", "ok"),
+                "gemini": lambda _a: ("reject", "nope"),
+                "codex": lambda _a: ("reject", "author vote ignored"),  # author skipped
+            },
+        )
+
+        verdicts = asyncio.run(arena.run(task_id, [candidate]))
+
+    verdict = verdicts[0]
+    # Active judges: claude (approve) + gemini (reject) -> 1/2, not a majority.
+    assert verdict.status == "rejected"
+    assert verdict.approvals == 1
+    assert verdict.rejections == 1
+
+
+def test_syntax_error_is_filtered_out() -> None:
+    """A candidate that fails ``ast.parse`` is filtered before judging."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "mc.db")
+        storage = Storage(db_path=db_path)
+        task_id = "task-filter"
+        storage.create_task(task_id, {"prompt": "broken"})
+        broken = "def add(a, b):\n    return a +"
+        artifact_id = storage.add_artifact(task_id, author="claude", content=broken)
+        candidate = Candidate(artifact_id=artifact_id, author="claude", content=broken)
+        arena = Arena(storage=storage, judges={"gemini": lambda _a: ("approve", "ok")})
+
+        verdicts = asyncio.run(arena.run(task_id, [candidate]))
+
+    assert verdicts[0].status == "filtered_out"
