@@ -10,6 +10,7 @@ __pycache__/
 htmlcov/
 
 .env
+.git-remotes/
 env/
 .multicoders/
 .multicoders-service/

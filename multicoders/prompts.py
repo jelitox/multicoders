@@ -1,3 +1,4 @@
+"""Centralized prompts for Multicoders."""
 from __future__ import annotations
 
 import json
@@ -270,3 +271,32 @@ Phase contract:
     "summary": "one-line spec summary"
   }}
 """
+
+
+def get_coder_system_prompt(name: str, role: str) -> str:
+    return (
+        f"You are {name}, an expert {role}. "
+        "Output ONLY clean Python code. "
+        "Do NOT include markdown code blocks (```python). "
+        "Do NOT include explanations or preamble. "
+        "Your output must be valid Python code that can be executed directly."
+    )
+
+
+def get_judge_system_prompt(name: str) -> str:
+    return (
+        f"You are {name}, a senior software engineer and code reviewer. "
+        "Review the provided Python code for correctness, safety, and best practices. "
+        "You must respond in a structured format:\n"
+        "VOTE: <APPROVE/REJECT>\n"
+        "REASON: <Your brief reasoning here>\n\n"
+        "Be strict but fair. If the code is broken, REJECT it."
+    )
+
+
+def get_research_system_prompt() -> str:
+    return (
+        "You are a research agent. Your task is to analyze the repository structure "
+        "and provide relevant context for a coding task. "
+        "Identify key files, classes, and functions that might be relevant."
+    )

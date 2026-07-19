@@ -41,6 +41,50 @@ from multicoders.storage import (
 )
 from multicoders.telegram import TelegramBot, TelegramError, TelegramMessage
 
+TELEGRAM_EXCEPTION_SUMMARY_LIMIT = 240
+DEFAULT_AGENT_INTERNAL_LOG_MAX_BYTES = 10 * 1024 * 1024
+
+
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)([\"']?\b[a-z0-9_/-]*(?:token|secret|password|api[_-]?key|access[_-]?key|private[_-]?key)[a-z0-9_/-]*[\"']?\s*[:=]\s*)([\"']?)[^\"'\s,}]+"
+)
+_AUTH_BEARER_RE = re.compile(r"(?i)\b(authorization\s*[:=]\s*bearer\s+)[a-z0-9._~+/=-]+")
+_TELEGRAM_BOT_TOKEN_RE = re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{20,}\b")
+_LLM_API_KEY_RE = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|sk-ant-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{20,})\b")
+
+
+def redact_sensitive_text(text: str) -> str:
+    if not text:
+        return ""
+    redacted = _SECRET_ASSIGNMENT_RE.sub(r"\1\2[REDACTED]", text)
+    redacted = _AUTH_BEARER_RE.sub(r"\1[REDACTED]", redacted)
+    redacted = _TELEGRAM_BOT_TOKEN_RE.sub("[REDACTED]", redacted)
+    redacted = _LLM_API_KEY_RE.sub("[REDACTED]", redacted)
+    return redacted
+
+
+def short_exception_text(exc: BaseException, *, limit: int = TELEGRAM_EXCEPTION_SUMMARY_LIMIT) -> str:
+    summary = getattr(exc, "summary", None)
+    if isinstance(summary, str) and summary.strip():
+        first_line = summary.strip().splitlines()[0]
+    else:
+        first_line = next((line.strip() for line in str(exc).splitlines() if line.strip()), "")
+    if not first_line:
+        first_line = exc.__class__.__name__
+    if len(first_line) <= limit:
+        return first_line
+    return first_line[: limit - 3].rstrip() + "..."
+
+
+def log_exception_details(exc: BaseException) -> None:
+    raw_stderr = getattr(exc, "raw_stderr", "")
+    raw_stdout = getattr(exc, "raw_stdout", "")
+    if isinstance(raw_stderr, str) and raw_stderr.strip():
+        LOGGER.debug("provider raw stderr: %s", raw_stderr)
+    if isinstance(raw_stdout, str) and raw_stdout.strip():
+        LOGGER.debug("provider raw stdout: %s", raw_stdout)
+    LOGGER.debug("exception traceback", exc_info=exc)
+
 ENV_FILE_NAME = ".env"
 DEFAULT_PROVIDERS = ["codex", "claude", "gemini"]
 SERVICE_POLL_SEC = 5
@@ -1028,6 +1072,14 @@ def append_discussion_run(
 
 
 def message_fingerprint(message: TelegramMessage) -> str:
+    if message.message_id is not None:
+        return "|".join(
+            [
+                message.chat_id,
+                str(message.message_thread_id or ""),
+                str(message.message_id),
+            ]
+        )
     return "|".join(
         [
             message.chat_id,
@@ -1037,6 +1089,14 @@ def message_fingerprint(message: TelegramMessage) -> str:
             message.text.strip(),
         ]
     )
+
+
+def first_available_agent(agents: list[AgentConfig], state: TelegramState | None = None) -> AgentConfig | None:
+    for agent in agents:
+        if state is not None and is_provider_sleeping(state, agent.provider):
+            continue
+        return agent
+    return agents[0] if agents else None
 
 
 def remember_message_key(state: TelegramState, key: str, limit: int = 100) -> None:
@@ -1178,7 +1238,7 @@ def preview_text(text: str, limit: int = 160) -> str:
 
 
 def send_group_message(agent: AgentConfig, text: str, dry_run: bool, run_id: str | None = None) -> None:
-    rendered = annotate_message(text, run_id)
+    rendered = redact_sensitive_text(annotate_message(text, run_id))
     if dry_run:
         LOGGER.debug("telegram send skipped mode=dry-run kind=group provider=%s text=%s", agent.provider, preview_text(rendered))
         return
@@ -1216,7 +1276,7 @@ def select_observer_bot(agents: list[AgentConfig]) -> TelegramBot | None:
 
 
 def send_service_message(bot: TelegramBot | None, text: str, dry_run: bool, run_id: str | None = None) -> None:
-    rendered = annotate_message(text, run_id)
+    rendered = redact_sensitive_text(annotate_message(text, run_id))
     if dry_run:
         LOGGER.debug("telegram send skipped mode=dry-run kind=service text=%s", preview_text(rendered))
         return
@@ -1273,7 +1333,7 @@ def parse_rich_chat_response(text: str, catalogs: dict[str, dict[str, str]] | No
 
 
 def send_group_media(agent: AgentConfig, media: RichMediaRequest, dry_run: bool, run_id: str | None = None) -> None:
-    caption = annotate_message(media.caption, run_id) if media.caption else None
+    caption = redact_sensitive_text(annotate_message(media.caption, run_id)) if media.caption else None
     if dry_run:
         LOGGER.debug(
             "telegram media send skipped mode=dry-run provider=%s kind=%s key=%s caption=%s",
@@ -1656,6 +1716,82 @@ def trim_chat_output(text: str) -> str:
     return "\n".join(compact).strip()
 
 
+def _run_provider_with_optional_cooldown(**kwargs) -> ProviderResult:
+    try:
+        return run_provider(**kwargs)
+    except TypeError as exc:
+        if "cooldown_sec" not in str(exc):
+            raise
+        retry_kwargs = dict(kwargs)
+        retry_kwargs.pop("cooldown_sec", None)
+        return run_provider(**retry_kwargs)
+
+
+def agent_internal_log_path(repo: Path, provider: str, run_id: str | None = None) -> Path:
+    safe_provider = re.sub(r"[^a-zA-Z0-9_.-]+", "_", provider).strip("._") or "agent"
+    if run_id:
+        return repo / ".multicoders" / "agent-logs" / safe_provider / f"{run_id}.jsonl"
+    return repo / ".multicoders" / "agent-logs" / f"{safe_provider}.jsonl"
+
+
+def redact_agent_internal_log_text(text: str) -> str:
+    return redact_sensitive_text(text)
+
+
+def agent_internal_log_max_bytes() -> int:
+    raw = os.environ.get("MULTICODERS_AGENT_LOG_MAX_BYTES", "")
+    if not raw:
+        return DEFAULT_AGENT_INTERNAL_LOG_MAX_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_AGENT_INTERNAL_LOG_MAX_BYTES
+    return max(value, 0)
+
+
+def rotate_agent_internal_log(path: Path, *, max_bytes: int | None = None) -> None:
+    limit = agent_internal_log_max_bytes() if max_bytes is None else max_bytes
+    if limit <= 0 or not path.exists():
+        return
+    try:
+        if path.stat().st_size < limit:
+            return
+        rotated = path.with_name(path.name + ".1")
+        if rotated.exists():
+            rotated.unlink()
+        path.replace(rotated)
+    except OSError as exc:
+        LOGGER.warning("agent internal log rotation failed path=%s error=%s", path, exc)
+
+
+def write_agent_internal_log(
+    *,
+    repo: Path,
+    agent: AgentConfig,
+    run_id: str,
+    result: ProviderResult,
+    phase: str,
+) -> None:
+    path = agent_internal_log_path(repo, agent.provider, run_id=run_id)
+    payload = {
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "run_id": run_id,
+        "phase": phase,
+        "provider": agent.provider,
+        "display_name": agent.display_name,
+        "model": agent.model,
+        "stdout": redact_agent_internal_log_text(result.stdout),
+        "stderr": redact_agent_internal_log_text(result.stderr),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rotate_agent_internal_log(path)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+    except OSError as exc:
+        LOGGER.warning("agent internal log write failed provider=%s path=%s error=%s", agent.provider, path, exc)
+
+
 def ask_chat_agent(
     *,
     agent: AgentConfig,
@@ -1683,7 +1819,7 @@ def ask_chat_agent(
             answer += f" Tomando lo anterior, sumo algo sobre {prior_messages[-1]['speaker']}."
     else:
         effective_timeout_sec = min(timeout_sec, CHAT_PROVIDER_TIMEOUT_SEC)
-        result = run_provider(
+        result = _run_provider_with_optional_cooldown(
             provider_name=agent.provider,
             prompt=prompt,
             repo=repo,
@@ -1691,7 +1827,16 @@ def ask_chat_agent(
             timeout_sec=effective_timeout_sec,
             cooldown_sec=PROVIDER_COOLDOWN_SEC,
         )
+        write_agent_internal_log(repo=repo, agent=agent, run_id=run_id, result=result, phase="chat")
         answer = trim_chat_output(result.text_output())
+        if not answer:
+            log_path = agent_internal_log_path(repo, agent.provider, run_id=run_id)
+            raise ProviderError(
+                f"{agent.provider} returned no human response; see {log_path}",
+                summary=f"{agent.provider} no devolvió respuesta humana; revisar agent-logs",
+                raw_stdout=result.stdout,
+                raw_stderr=result.stderr,
+            )
     LOGGER.info("chat turn finished run_id=%s provider=%s", run_id, agent.provider)
     send_chat_response(agent, answer, dry_run, run_id=run_id)
     return answer
@@ -1773,9 +1918,10 @@ def run_group_conversation(
             continue
         except Exception as exc:
             LOGGER.warning("chat agent failed run_id=%s provider=%s error=%s", active_run_id, agent.provider, exc)
+            log_exception_details(exc)
             send_service_message(
                 observer_bot,
-                f"[multicoders-service] {agent.display_name} no pudo responder.\ndetails: {exc}",
+                f"[multicoders-service] {agent.display_name} no pudo responder.\ndetails: {short_exception_text(exc)}",
                 dry_run,
                 run_id=active_run_id,
             )
@@ -1783,6 +1929,70 @@ def run_group_conversation(
         transcript.append({"speaker": agent.display_name, "text": answer})
     if len(transcript) == initial_length:
         raise MulticodersError("ningún bot pudo responder al mensaje")
+    return transcript
+
+
+def run_single_human_response(
+    *,
+    agents: list[AgentConfig],
+    sender_name: str,
+    user_message: str,
+    repo: Path,
+    timeout_sec: int,
+    dry_run: bool,
+    observer_bot: TelegramBot | None,
+    state: TelegramState | None = None,
+    conn=None,
+) -> list[dict[str, str]]:
+    agent = first_available_agent(agents, state)
+    if agent is None:
+        raise MulticodersError("no hay bots configurados para responder")
+    run_id = f"chat-{uuid.uuid4().hex[:10]}"
+    previous_chat = active_bot_chat(state) if state is not None else None
+    transcript = transcript_from_state(previous_chat) if previous_chat is not None else []
+    catchup_note = None
+    if state is not None:
+        catchup_note = handle_provider_wake(
+            state=state,
+            agent=agent,
+            observer_bot=observer_bot,
+            dry_run=dry_run,
+            run_id=run_id,
+            conn=conn,
+        )
+        if is_provider_sleeping(state, agent.provider):
+            record_pending_for_provider(
+                state,
+                provider=agent.provider,
+                sender_name=sender_name,
+                user_message=user_message,
+                transcript_tail=transcript,
+            )
+            save_telegram_state(state)
+            raise MulticodersError(f"{agent.display_name} no está disponible para responder")
+    answer = ask_chat_agent(
+        agent=agent,
+        sender_name=sender_name,
+        user_message=user_message,
+        prior_messages=transcript,
+        repo=repo,
+        timeout_sec=timeout_sec,
+        dry_run=dry_run,
+        run_id=run_id,
+        catchup_note=catchup_note,
+    )
+    transcript.append({"speaker": agent.display_name, "text": answer})
+    if state is not None:
+        state.bot_chat = {
+            "active": False,
+            "run_id": run_id,
+            "sender_name": sender_name,
+            "seed_message": user_message,
+            "next_provider_index": 0,
+            "started_at": utc_now_iso(),
+            "last_turn_at": utc_now_iso(),
+            "transcript": transcript[-AUTONOMOUS_CHAT_TRANSCRIPT_LIMIT:],
+        }
     return transcript
 
 
@@ -1945,11 +2155,13 @@ def advance_autonomous_bot_chat(
             failures.append(f"{agent.display_name}: sin tokens")
             continue
         except Exception as exc:
-            failures.append(f"{agent.display_name}: {exc}")
+            short_detail = short_exception_text(exc)
+            failures.append(f"{agent.display_name}: {short_detail}")
             LOGGER.warning("autonomous chat agent failed run_id=%s provider=%s error=%s", run_id, agent.provider, exc)
+            log_exception_details(exc)
             send_service_message(
                 observer_bot,
-                f"[multicoders-service] {agent.display_name} no pudo responder.\ndetails: {exc}",
+                f"[multicoders-service] {agent.display_name} no pudo responder.\ndetails: {short_detail}",
                 dry_run,
                 run_id=run_id,
             )
@@ -3279,9 +3491,14 @@ def process_service_commands(
 
     seen_keys = set(telegram_state.recent_message_keys or [])
     autonomous_chat_changed = False
+    saw_bot_update_in_scope = False
     for listener, update in sorted(gathered, key=lambda item: (item[1].date, item[1].sender_id, item[1].text, item[1].update_id)):
         listener_name = getattr(listener, "name", listener.__class__.__name__)
-        if not message_matches_listener_scope(update, listener) or update.is_bot or not update.text:
+        if not message_matches_listener_scope(update, listener) or not update.text:
+            continue
+        if update.is_bot:
+            saw_bot_update_in_scope = True
+            LOGGER.debug("service skipped bot update bot=%s sender=%s text=%s", listener_name, update.sender_name, preview_text(update.text))
             continue
         fingerprint = message_fingerprint(update)
         if fingerprint in seen_keys:
@@ -3607,17 +3824,17 @@ def process_service_commands(
                 autonomous_chat_changed = True
             except Exception as exc:
                 LOGGER.exception("group chat command failed sender=%s", update.sender_name)
+                log_exception_details(exc)
                 send_service_message(
                     bot,
-                    f"[multicoders-service] No pude cerrar la conversación.\ndetails: {exc}",
+                    f"[multicoders-service] No pude cerrar la conversación.\ndetails: {short_exception_text(exc)}",
                     dry_run,
                 )
             continue
         if not update.text.startswith("/"):
-            LOGGER.info("group conversation triggered sender=%s", update.sender_name)
+            LOGGER.info("single bot response triggered sender=%s", update.sender_name)
             try:
-                start_autonomous_bot_chat(
-                    state=telegram_state,
+                run_single_human_response(
                     agents=agents,
                     sender_name=update.sender_name,
                     user_message=update.text,
@@ -3625,14 +3842,16 @@ def process_service_commands(
                     timeout_sec=provider_timeout_sec,
                     dry_run=dry_run,
                     observer_bot=bot,
+                    state=telegram_state,
                     conn=conn,
                 )
                 autonomous_chat_changed = True
             except Exception as exc:
                 LOGGER.exception("group conversation failed sender=%s", update.sender_name)
+                log_exception_details(exc)
                 send_service_message(
                     bot,
-                    f"[multicoders-service] No pude cerrar la conversación.\ndetails: {exc}",
+                    f"[multicoders-service] No pude cerrar la conversación.\ndetails: {short_exception_text(exc)}",
                     dry_run,
                 )
     active_brainstorm = brainstorm_session_active(telegram_state)
@@ -3683,6 +3902,7 @@ def process_service_commands(
             )
         except Exception as exc:
             LOGGER.exception("brainstorming step failed")
+            log_exception_details(exc)
             run_id = None
             session = brainstorm_session_active(telegram_state)
             if session is not None:
@@ -3690,11 +3910,11 @@ def process_service_commands(
             telegram_state.brainstorming = None
             send_service_message(
                 bot,
-                f"[multicoders-service] Corté el brainstorming por un error.\ndetails: {exc}",
+                f"[multicoders-service] Corté el brainstorming por un error.\ndetails: {short_exception_text(exc)}",
                 dry_run,
                 run_id=run_id,
             )
-    if not autonomous_chat_changed and active_bot_chat(telegram_state) is not None:
+    if not autonomous_chat_changed and not saw_bot_update_in_scope and active_bot_chat(telegram_state) is not None:
         try:
             advance_autonomous_bot_chat(
                 state=telegram_state,
@@ -3707,6 +3927,7 @@ def process_service_commands(
             )
         except Exception as exc:
             LOGGER.exception("autonomous bot chat turn failed")
+            log_exception_details(exc)
             state_run_id = None
             chat = active_bot_chat(telegram_state)
             if chat is not None:
@@ -3714,7 +3935,7 @@ def process_service_commands(
             telegram_state.bot_chat = None
             send_service_message(
                 bot,
-                f"[multicoders-service] Corté la conversación autónoma por un error.\ndetails: {exc}",
+                f"[multicoders-service] Corté la conversación autónoma por un error.\ndetails: {short_exception_text(exc)}",
                 dry_run,
                 run_id=state_run_id,
             )

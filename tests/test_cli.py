@@ -213,7 +213,7 @@ class SendTestMessagesCliTests(unittest.TestCase):
             self.assertEqual(task.task_type, "feature")
             self.assertIn("lead: claude", bot.sent_messages[0])
 
-    def test_plain_text_message_triggers_three_bot_conversation(self) -> None:
+    def test_plain_text_message_triggers_single_bot_response(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             conn = connect_db(Path(temp_dir) / "service.db")
             init_db(conn)
@@ -241,15 +241,12 @@ class SendTestMessagesCliTests(unittest.TestCase):
                 AgentConfig(provider="gemini", display_name="gemini-bot", model=None, bot=agent_bots[2]),
             ]
             prompts: list[str] = []
-            outputs = [
-                "El sol es una estrella.",
-                "Sumo algo: también es la fuente principal de energía de la Tierra.",
-                "Complemento: su gravedad mantiene a los planetas en órbita.",
-            ]
+            output = "El sol es una estrella."
 
             def fake_run_provider(provider_name, prompt, repo, model, timeout_sec):
+                self.assertEqual(provider_name, "codex")
                 prompts.append(prompt)
-                return ProviderResult(provider=provider_name, stdout=outputs[len(prompts) - 1], stderr="")
+                return ProviderResult(provider=provider_name, stdout=output, stderr="")
 
             with patch("multicoders.app.run_provider", side_effect=fake_run_provider):
                 process_service_commands(
@@ -263,19 +260,15 @@ class SendTestMessagesCliTests(unittest.TestCase):
                     conversation_repo=Path(temp_dir),
                 )
 
-            self.assertEqual(len(observer_bot.sent_messages), 1)
-            self.assertIn("Jelitox preguntó: que es el sol?", observer_bot.sent_messages[0])
-            self.assertTrue(agent_bots[0].sent_messages[0].endswith(outputs[0]))
-            self.assertTrue(agent_bots[1].sent_messages[0].endswith(outputs[1]))
-            self.assertTrue(agent_bots[2].sent_messages[0].endswith(outputs[2]))
+            self.assertEqual(observer_bot.sent_messages, [])
+            self.assertTrue(agent_bots[0].sent_messages[0].endswith(output))
+            self.assertEqual(agent_bots[1].sent_messages, [])
+            self.assertEqual(agent_bots[2].sent_messages, [])
             self.assertIn("No previous agent messages yet.", prompts[0])
-            self.assertIn(outputs[0], prompts[1])
-            self.assertIn(outputs[0], prompts[2])
-            self.assertIn(outputs[1], prompts[2])
             assert state.bot_chat is not None
-            self.assertTrue(state.bot_chat["active"])
+            self.assertFalse(state.bot_chat["active"])
             self.assertEqual(state.bot_chat["next_provider_index"], 0)
-            self.assertEqual(len(state.bot_chat["transcript"]), 3)
+            self.assertEqual(len(state.bot_chat["transcript"]), 1)
 
     def test_chat_command_triggers_three_bot_conversation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -470,6 +463,67 @@ class SendTestMessagesCliTests(unittest.TestCase):
             self.assertEqual(state.bot_chat["next_provider_index"], 2)
             self.assertEqual(len(state.bot_chat["transcript"]), 2)
 
+    def test_bot_message_does_not_trigger_or_advance_chat(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            conn = connect_db(Path(temp_dir) / "service.db")
+            init_db(conn)
+            state = TelegramState(
+                state_file=Path(temp_dir) / "telegram-state.json",
+                discussion_runs=[],
+                bot_chat={
+                    "active": True,
+                    "run_id": "chat-active",
+                    "sender_name": "Jelitox",
+                    "seed_message": "hablen de arquitectura",
+                    "next_provider_index": 1,
+                    "transcript": [{"speaker": "codex-bot", "text": "Contexto previo."}],
+                },
+            )
+            update = TelegramMessage(
+                update_id=69,
+                message_id=9001,
+                chat_id="-100123",
+                chat_type="group",
+                chat_title="Multicoders",
+                sender_id="99",
+                sender_name="gemini-bot",
+                is_bot=True,
+                text="Aca sigo hablando solo.",
+                date=1710000018,
+            )
+            observer_bot = FakeTelegramBot(chat_id="-100123", updates=[update])
+            agent_bots = [
+                FakeTelegramBot(chat_id="-100123", updates=[]),
+                FakeTelegramBot(chat_id="-100123", updates=[]),
+                FakeTelegramBot(chat_id="-100123", updates=[]),
+            ]
+            agents = [
+                AgentConfig(provider="codex", display_name="codex-bot", model=None, bot=agent_bots[0]),
+                AgentConfig(provider="claude", display_name="claude-bot", model=None, bot=agent_bots[1]),
+                AgentConfig(provider="gemini", display_name="gemini-bot", model=None, bot=agent_bots[2]),
+            ]
+
+            with patch("multicoders.app.run_provider", side_effect=AssertionError("bot updates must not call providers")):
+                process_service_commands(
+                    bot=observer_bot,
+                    conn=conn,
+                    telegram_state=state,
+                    dry_run=False,
+                    providers=["codex", "claude", "gemini"],
+                    agents=agents,
+                    provider_timeout_sec=30,
+                    conversation_repo=Path(temp_dir),
+                )
+
+            self.assertEqual(observer_bot.sent_messages, [])
+            self.assertEqual(agent_bots[0].sent_messages, [])
+            self.assertEqual(agent_bots[1].sent_messages, [])
+            self.assertEqual(agent_bots[2].sent_messages, [])
+            assert state.bot_chat is not None
+            self.assertTrue(state.bot_chat["active"])
+            self.assertEqual(state.bot_chat["next_provider_index"], 1)
+            self.assertEqual(len(state.bot_chat["transcript"]), 1)
+
     def test_chat_response_unwraps_provider_json_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             conn = connect_db(Path(temp_dir) / "service.db")
@@ -575,7 +629,7 @@ class SendTestMessagesCliTests(unittest.TestCase):
             self.assertEqual(state.bot_chat["next_provider_index"], 1)
             self.assertEqual(len(state.bot_chat["transcript"]), 2)
 
-    def test_human_message_during_active_chat_triggers_full_new_round(self) -> None:
+    def test_human_message_during_active_chat_triggers_single_contextual_response(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             conn = connect_db(Path(temp_dir) / "service.db")
             init_db(conn)
@@ -614,11 +668,12 @@ class SendTestMessagesCliTests(unittest.TestCase):
                 AgentConfig(provider="gemini", display_name="gemini-bot", model=None, bot=agent_bots[2]),
             ]
             prompts: list[str] = []
-            outputs = ["Codex sobre latencia.", "Claude suma colas.", "Gemini cierra con metricas."]
+            output = "Codex sobre latencia."
 
             def fake_run_provider(provider_name, prompt, repo, model, timeout_sec):
+                self.assertEqual(provider_name, "codex")
                 prompts.append(prompt)
-                return ProviderResult(provider=provider_name, stdout=outputs[len(prompts) - 1], stderr="")
+                return ProviderResult(provider=provider_name, stdout=output, stderr="")
 
             with patch("multicoders.app.run_provider", side_effect=fake_run_provider):
                 process_service_commands(
@@ -633,15 +688,15 @@ class SendTestMessagesCliTests(unittest.TestCase):
                 )
 
             self.assertEqual(len(agent_bots[0].sent_messages), 1)
-            self.assertEqual(len(agent_bots[1].sent_messages), 1)
-            self.assertEqual(len(agent_bots[2].sent_messages), 1)
+            self.assertEqual(agent_bots[1].sent_messages, [])
+            self.assertEqual(agent_bots[2].sent_messages, [])
             self.assertIn("Antes deciamos contrato.", prompts[0])
             self.assertIn("ahora respondan sobre latencia", prompts[0])
-            self.assertIn(outputs[0], prompts[1])
             assert state.bot_chat is not None
             self.assertEqual(state.bot_chat["seed_message"], "ahora respondan sobre latencia")
+            self.assertFalse(state.bot_chat["active"])
             self.assertEqual(state.bot_chat["next_provider_index"], 0)
-            self.assertEqual(len(state.bot_chat["transcript"]), 4)
+            self.assertEqual(len(state.bot_chat["transcript"]), 2)
 
     def test_chat_agent_failure_does_not_block_remaining_bots(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

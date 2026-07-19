@@ -6,8 +6,17 @@ authors = [
     { name = "Jelitox", email = "jelitox@example.com" }
 ]
 dependencies = [
-    "ai-parrot @ file:///home/jelitox/repos/labs/multicoders/_refs/ai-parrot/packages/ai-parrot",
-    "sqlite3-api",
+    "ai-parrot",
+    "ai-parrot-tools[git,docker,sandbox,codeinterpreter,db]",
+    "nest-asyncio>=1.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+hornero = [
+    "hornero[knowledge]>=0.4",
 ]
 
 [build-system]
@@ -17,3 +26,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["multicoders*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["_refs", ".git", ".venv"]
+
+[tool.uv.sources]
+ai-parrot = { path = "_refs/ai-parrot/packages/ai-parrot", editable = true }
+ai-parrot-tools = { path = "_refs/ai-parrot/packages/ai-parrot-tools", editable = true }

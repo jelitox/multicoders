@@ -22,6 +22,7 @@ import sys
 
 # Subcommands routed to the deterministic Parrot arena engine (cli.py).
 ARENA_COMMANDS = {"arena"}
+HORNERO_COMMANDS = {"hornero"}
 
 
 def _print_top_help() -> None:
@@ -36,6 +37,9 @@ def _print_top_help() -> None:
     print("Deterministic Parrot arena engine (in-process):")
     print("  multicoders arena [--dry-run] 'prompt'")
     print("  multicoders arena --resume TASK_ID")
+    print()
+    print("Hornero lifecycle / SDD / knowledge engine:")
+    print("  multicoders hornero <any hornero command>")
     print()
     print("Per-engine help:")
     print("  multicoders run --help")
@@ -53,6 +57,11 @@ def main(argv: list[str] | None = None) -> int:
         from .cli import main as arena_main
 
         return arena_main(argv[1:])
+
+    if argv[0] in HORNERO_COMMANDS:
+        from .hornero import main as hornero_main
+
+        return hornero_main(argv[1:])
 
     from .app import main as council_main
 

@@ -62,6 +62,7 @@ class TelegramMessage:
     text: str
     date: int
     message_thread_id: int | None = None
+    message_id: int | None = None
 
 
 class TelegramError(RuntimeError):
@@ -170,6 +171,7 @@ class TelegramBot:
             sender = message.get("from")
             text = message.get("text")
             update_id = item.get("update_id")
+            message_id = message.get("message_id")
             date = message.get("date")
             if not isinstance(chat, dict) or not isinstance(sender, dict) or not isinstance(text, str):
                 continue
@@ -178,6 +180,7 @@ class TelegramBot:
             messages.append(
                 TelegramMessage(
                     update_id=update_id,
+                    message_id=message_id if isinstance(message_id, int) else None,
                     chat_id=str(chat.get("id", "")),
                     chat_type=str(chat.get("type", "")),
                     chat_title=str(chat.get("title") or chat.get("username") or chat.get("first_name") or ""),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import unittest.mock
 
 from multicoders.providers import PROVIDER_SPECS, ProviderResult, build_provider_command, extract_json_object, extract_text_output
 
@@ -64,9 +65,47 @@ class ProviderCommandTests(unittest.TestCase):
         raw = '{"session_id":"abc","response":"respuesta limpia"}'
         self.assertEqual(extract_text_output(raw), "respuesta limpia")
 
+    def test_extract_text_output_ignores_trailing_telemetry_noise(self) -> None:
+        raw = (
+            '{"session_id":"abc","response":"respuesta limpia","stats":{"tokens":{"total":123}}}'
+            "\nClearcutLogger: Flush already in progress, marking pending flush."
+        )
+        self.assertEqual(extract_text_output(raw), "respuesta limpia")
+
+    def test_extract_text_output_drops_machine_only_telemetry(self) -> None:
+        raw = '{"session_id":"abc","response":"","stats":{"tokens":{"total":123}}}'
+        self.assertEqual(extract_text_output(raw), "")
+
     def test_provider_result_text_output_unwraps_nested_result(self) -> None:
         result = ProviderResult(provider="gemini", stdout='{"result":{"content":{"parts":[{"text":"hola"}]}}}', stderr="")
         self.assertEqual(result.text_output(), "hola")
+
+    @unittest.mock.patch("subprocess.run")
+    @unittest.mock.patch("shutil.which", return_value="/usr/bin/gemini")
+    def test_run_provider_injects_gemini_telemetry_env(self, mock_which, mock_run) -> None:
+        from pathlib import Path
+        from multicoders.providers import run_provider
+
+        mock_proc = unittest.mock.MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = "{}"
+        mock_proc.stderr = ""
+        mock_run.return_value = mock_proc
+
+        run_provider(
+            provider_name="gemini",
+            prompt="test prompt",
+            repo=Path("/tmp"),
+            model=None,
+            timeout_sec=10,
+        )
+
+        mock_run.assert_called_once()
+        kwargs = mock_run.call_args[1]
+        self.assertIn("env", kwargs)
+        env = kwargs["env"]
+        self.assertEqual(env["GEMINI_TELEMETRY_ENABLED"], "false")
+        self.assertEqual(env["GEMINI_TELEMETRY_LOG_PROMPTS"], "false")
 
 
 if __name__ == "__main__":

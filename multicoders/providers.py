@@ -12,16 +12,80 @@ from pathlib import Path
 DEFAULT_PROVIDER_COOLDOWN_SEC = 3600
 
 
+_PROVIDER_ERROR_SUMMARY_LIMIT = 240
+
+
 class ProviderError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        summary: str | None = None,
+        raw_stderr: str = "",
+        raw_stdout: str = "",
+        return_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.summary = summary or _short_error_summary(message)
+        self.raw_stderr = raw_stderr
+        self.raw_stdout = raw_stdout
+        self.return_code = return_code
 
 
 class ProviderQuotaError(ProviderError):
     def __init__(self, provider: str, retry_at: _dt.datetime | None, raw_message: str) -> None:
-        super().__init__(raw_message or f"{provider} quota exhausted")
+        summary = _short_error_summary(raw_message) or f"{provider} quota exhausted"
+        super().__init__(raw_message or f"{provider} quota exhausted", summary=summary, raw_stderr=raw_message)
         self.provider = provider
         self.retry_at = retry_at
         self.raw_message = raw_message
+
+
+def _short_error_summary(text: str, limit: int = _PROVIDER_ERROR_SUMMARY_LIMIT) -> str:
+    if not text:
+        return ""
+    extracted = _extract_json_error_message(text)
+    candidate = extracted or text
+    first_line = next((line.strip() for line in candidate.splitlines() if line.strip()), "")
+    if not first_line:
+        return ""
+    if len(first_line) <= limit:
+        return first_line
+    return first_line[: limit - 3].rstrip() + "..."
+
+
+def _extract_json_error_message(text: str) -> str | None:
+    for candidate in _brace_candidates(text):
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        message = _find_error_message(payload)
+        if message:
+            return message
+    return None
+
+
+def _find_error_message(payload: object) -> str | None:
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+        message = payload.get("message")
+        if isinstance(message, str) and message.strip() and "error" in payload:
+            return message.strip()
+        for value in payload.values():
+            found = _find_error_message(value)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for item in payload:
+            found = _find_error_message(item)
+            if found:
+                return found
+    return None
 
 
 _QUOTA_PATTERNS: dict[str, list[re.Pattern[str]]] = {
@@ -165,9 +229,26 @@ def extract_text_output(text: str) -> str:
     try:
         payload = json.loads(stripped)
     except json.JSONDecodeError:
-        return stripped
+        try:
+            payload = extract_json_object(stripped)
+        except ProviderError:
+            return stripped
     extracted = _extract_text_from_payload(payload)
-    return extracted.strip() if extracted else stripped
+    if extracted and extracted.strip():
+        return extracted.strip()
+    if _looks_like_machine_only_provider_payload(payload):
+        return ""
+    return stripped
+
+
+def _looks_like_machine_only_provider_payload(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    machine_keys = {"session_id", "stats", "usage", "metrics", "telemetry"}
+    if not any(key in payload for key in machine_keys):
+        return False
+    human_keys = ("response", "content", "text", "result", "message", "candidates", "parts")
+    return not any(_extract_text_from_payload(payload.get(key)) for key in human_keys)
 
 
 def _extract_text_from_payload(payload: object) -> str | None:
@@ -295,6 +376,12 @@ def run_provider(
         supports_model=spec.supports_model,
     )
 
+    import os
+    env = dict(os.environ)
+    if provider_name == "gemini":
+        env["GEMINI_TELEMETRY_ENABLED"] = "false"
+        env["GEMINI_TELEMETRY_LOG_PROMPTS"] = "false"
+
     try:
         proc = subprocess.run(
             command,
@@ -304,6 +391,7 @@ def run_provider(
             capture_output=True,
             timeout=timeout_sec,
             check=False,
+            env=env,
         )
     except subprocess.TimeoutExpired as exc:
         output = "\n".join(
@@ -325,7 +413,18 @@ def run_provider(
         )
         if quota_exc is not None:
             raise quota_exc
-        raise ProviderError(proc.stderr.strip() or proc.stdout.strip() or f"{provider_name} failed")
+        raw_stderr = proc.stderr or ""
+        raw_stdout = proc.stdout or ""
+        haystack = "\n".join(part for part in (raw_stderr, raw_stdout) if part)
+        summary = _short_error_summary(haystack) or f"{provider_name} failed (exit {proc.returncode})"
+        message = f"{provider_name} failed (exit {proc.returncode}): {summary}"
+        raise ProviderError(
+            message,
+            summary=summary,
+            raw_stderr=raw_stderr,
+            raw_stdout=raw_stdout,
+            return_code=proc.returncode,
+        )
     return ProviderResult(provider=provider_name, stdout=proc.stdout, stderr=proc.stderr)
 
 

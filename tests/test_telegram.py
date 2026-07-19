@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 import urllib.parse
+from pathlib import Path
 from unittest.mock import patch
 
+from multicoders.app import AgentConfig, ask_chat_agent, send_chat_response, write_agent_internal_log
+from multicoders.providers import ProviderError, ProviderResult
 from multicoders.telegram import TelegramBot, TelegramMessage, split_telegram_text, trim_telegram_caption
 
 
@@ -17,6 +21,30 @@ class _FakeResponse:
 
     def read(self) -> bytes:
         return json.dumps({"ok": True, "result": {"message_id": 1}}).encode("utf-8")
+
+
+class _FakeBot:
+    name = "fake-bot"
+    chat_id = "-100123"
+    message_thread_id = None
+
+    def __init__(self) -> None:
+        self.sent_messages: list[str] = []
+        self.sent_photos: list[tuple[str, str | None]] = []
+        self.sent_animations: list[tuple[str, str | None]] = []
+        self.sent_stickers: list[str] = []
+
+    def send_message(self, text: str) -> None:
+        self.sent_messages.append(text)
+
+    def send_photo(self, photo: str, caption: str | None = None) -> None:
+        self.sent_photos.append((photo, caption))
+
+    def send_animation(self, animation: str, caption: str | None = None) -> None:
+        self.sent_animations.append((animation, caption))
+
+    def send_sticker(self, sticker: str) -> None:
+        self.sent_stickers.append(sticker)
 
 
 class TelegramBotTests(unittest.TestCase):
@@ -112,6 +140,41 @@ class TelegramBotTests(unittest.TestCase):
         for _, payload in captured:
             self.assertEqual(payload["message_thread_id"], "77")
 
+    def test_chat_response_redacts_secret_before_telegram_message(self) -> None:
+        bot = _FakeBot()
+        agent = AgentConfig(provider="gemini", display_name="Gemini", model="gemini-test", bot=bot)
+
+        send_chat_response(
+            agent,
+            "No publicar BOT_TOKEN=123456:abcdefghijklmnopqrstuvwxyz ni sk-testsecret1234567890",
+            dry_run=False,
+            run_id="run123",
+        )
+
+        self.assertEqual(len(bot.sent_messages), 1)
+        sent = bot.sent_messages[0]
+        self.assertIn("[REDACTED]", sent)
+        self.assertNotIn("123456:abcdefghijklmnopqrstuvwxyz", sent)
+        self.assertNotIn("sk-testsecret1234567890", sent)
+
+    def test_chat_response_redacts_secret_before_telegram_media_caption(self) -> None:
+        bot = _FakeBot()
+        agent = AgentConfig(provider="gemini", display_name="Gemini", model="gemini-test", bot=bot)
+
+        with patch("multicoders.app.media_catalogs", return_value={"gif": {"shipit": "https://example.test/shipit.gif"}}):
+            send_chat_response(
+                agent,
+                "Caption con BOT_TOKEN=123456:abcdefghijklmnopqrstuvwxyz\n[gif:shipit]",
+                dry_run=False,
+                run_id="run123",
+            )
+
+        self.assertEqual(len(bot.sent_animations), 1)
+        _, caption = bot.sent_animations[0]
+        self.assertIsNotNone(caption)
+        self.assertIn("[REDACTED]", caption or "")
+        self.assertNotIn("123456:abcdefghijklmnopqrstuvwxyz", caption or "")
+
     def test_trim_telegram_caption_truncates_to_limit(self) -> None:
         caption = trim_telegram_caption("a" * 1025)
         assert caption is not None
@@ -133,6 +196,111 @@ class TelegramBotTests(unittest.TestCase):
             message_thread_id=88,
         )
         self.assertFalse(bot.message_matches_scope(message))
+
+    def test_agent_internal_log_is_written_per_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            agent = AgentConfig(provider="gemini", display_name="Gemini", model="gemini-test", bot=None)
+            result = ProviderResult(
+                provider="gemini",
+                stdout='{"response":"solo chat","BOT_TOKEN":"123456:abcdefghijklmnopqrstuvwxyz","stats":{"tokens":{"total":123}}}',
+                stderr="ClearcutLogger: Flush already in progress\nAuthorization: Bearer sk-testsecret1234567890",
+            )
+
+            write_agent_internal_log(repo=repo, agent=agent, run_id="run123", result=result, phase="chat")
+
+            log_path = repo / ".multicoders" / "agent-logs" / "gemini" / "run123.jsonl"
+            payload = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(payload["provider"], "gemini")
+            self.assertEqual(payload["run_id"], "run123")
+            self.assertIn('"stats"', payload["stdout"])
+            self.assertIn("ClearcutLogger", payload["stderr"])
+            self.assertNotIn("123456:abcdefghijklmnopqrstuvwxyz", payload["stdout"])
+            self.assertNotIn("sk-testsecret1234567890", payload["stderr"])
+            self.assertIn("[REDACTED]", payload["stdout"])
+            self.assertIn("[REDACTED]", payload["stderr"])
+
+    def test_agent_internal_log_rotates_when_limit_is_reached(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"MULTICODERS_AGENT_LOG_MAX_BYTES": "1"}):
+            repo = Path(tmp)
+            agent = AgentConfig(provider="gemini", display_name="Gemini", model="gemini-test", bot=None)
+            result = ProviderResult(provider="gemini", stdout='{"response":"solo chat"}', stderr="")
+
+            write_agent_internal_log(repo=repo, agent=agent, run_id="run123", result=result, phase="chat1")
+            write_agent_internal_log(repo=repo, agent=agent, run_id="run123", result=result, phase="chat2")
+
+            log_path = repo / ".multicoders" / "agent-logs" / "gemini" / "run123.jsonl"
+            self.assertTrue(log_path.exists())
+            self.assertTrue(log_path.with_name("run123.jsonl.1").exists())
+            current_payload = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+            rotated_payload = json.loads(log_path.with_name("run123.jsonl.1").read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(current_payload["phase"], "chat2")
+            self.assertEqual(rotated_payload["phase"], "chat1")
+
+    def test_chat_agent_rejects_empty_machine_only_response(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            agent = AgentConfig(provider="gemini", display_name="Gemini", model="gemini-test", bot=None)
+            result = ProviderResult(
+                provider="gemini",
+                stdout='{"session_id":"abc","response":"","stats":{"tokens":{"total":123}}}',
+                stderr="ClearcutLogger: Flush already in progress",
+            )
+
+            with patch("multicoders.app._run_provider_with_optional_cooldown", return_value=result):
+                with self.assertRaises(ProviderError) as raised:
+                    ask_chat_agent(
+                        agent=agent,
+                        sender_name="Jelitox",
+                        user_message="hola",
+                        prior_messages=[],
+                        repo=repo,
+                        timeout_sec=10,
+                        dry_run=False,
+                        run_id="run123",
+                    )
+
+            self.assertIn("no devolvió respuesta humana", raised.exception.summary)
+            log_path = repo / ".multicoders" / "agent-logs" / "gemini" / "run123.jsonl"
+            self.assertTrue(log_path.exists())
+
+    def test_chat_agent_sends_only_human_response_from_verbose_provider_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            bot = _FakeBot()
+            agent = AgentConfig(provider="claude", display_name="Claude", model="claude-test", bot=bot)
+            result = ProviderResult(
+                provider="claude",
+                stdout=(
+                    '{"session_id":"abc","response":"respuesta limpia",'
+                    '"stats":{"tokens":{"total":123}}}'
+                    "\nClearcutLogger: Flush already in progress, marking pending flush."
+                ),
+                stderr="",
+            )
+
+            with patch("multicoders.app._run_provider_with_optional_cooldown", return_value=result):
+                answer = ask_chat_agent(
+                    agent=agent,
+                    sender_name="Jelitox",
+                    user_message="hola",
+                    prior_messages=[],
+                    repo=repo,
+                    timeout_sec=10,
+                    dry_run=False,
+                    run_id="run456",
+                )
+
+            self.assertEqual(answer, "respuesta limpia")
+            self.assertEqual(len(bot.sent_messages), 1)
+            sent = bot.sent_messages[0]
+            self.assertIn("respuesta limpia", sent)
+            self.assertNotIn("stats", sent)
+            self.assertNotIn("session_id", sent)
+            self.assertNotIn("ClearcutLogger", sent)
+            log_path = repo / ".multicoders" / "agent-logs" / "claude" / "run456.jsonl"
+            payload = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+            self.assertIn("ClearcutLogger", payload["stdout"])
 
 
 if __name__ == "__main__":

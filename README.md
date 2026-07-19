@@ -65,6 +65,31 @@ cp env/.env env/dev/.env
 Run `python -m multicoders --help` for the dispatcher overview, or
 `python -m multicoders <command> --help` for per-engine options.
 
+### Hornero engine
+
+Multicoders exposes Hornero's complete lifecycle surface through a delegated
+subcommand. Install the optional integration with `pip install
+'multicoders[hornero]'`, then pass any Hornero command after `hornero`:
+
+```bash
+python -m multicoders hornero init --hooks
+python -m multicoders hornero ingest requirements.md
+python -m multicoders hornero reconcile --dry-run
+python -m multicoders hornero reindex
+python -m multicoders hornero wiki parrot build
+python -m multicoders hornero wiki codex install
+python -m multicoders hornero wiki claude install
+python -m multicoders hornero wiki gemini install
+python -m multicoders hornero report
+python -m multicoders hornero status
+```
+
+This adapter deliberately delegates to Hornero rather than reimplementing its
+SDD, evidence gates, knowledge graph, LLM-wiki, assurance, runtime, reports,
+and release workflows. `multicoders run` and `multicoders arena` remain the
+multi-agent execution engines; `multicoders hornero` is the project lifecycle
+engine they can share.
+
 ### Arena engine
 
 Dry-run without LLM providers:
