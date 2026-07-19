@@ -5,6 +5,8 @@ local `ai-parrot` sources. It coordinates research, candidate generation,
 consensus review, QA validation, storage, and optional Parrot integration while
 keeping a dry-run path available for local validation without LLM calls.
 
+![Multi-Agent Pipeline System Architecture](docs/images/Multi-Agent_Pipeline_System_Architecture.png)
+
 ## What It Does
 
 - Runs a deterministic flow: Research -> Dispatch -> Arena -> QA.
