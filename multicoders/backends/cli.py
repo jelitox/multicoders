@@ -16,20 +16,9 @@ The actual subprocess invocation is delegated to :mod:`multicoders.providers`
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 
 from .base import AgentContext, Artifact, BackendError, BackendUnavailable, TaskSpec
-
-# Provider API-key env vars that, if present, switch the official CLI to
-# pay-per-token API billing. CliBackend strips them from the child env so a
-# subscription session is never silently billed as API usage.
-_API_KEY_ENV_VARS: dict[str, tuple[str, ...]] = {
-    "claude": ("ANTHROPIC_API_KEY",),
-    "codex": ("OPENAI_API_KEY",),
-    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI"),
-}
-
 
 class CliBackend:
     """Run the official provider CLI (BYO-auth) and capture its output."""
@@ -59,15 +48,6 @@ class CliBackend:
 
         return provider_available(self.provider)
 
-    def _guard_byo_auth(self) -> None:
-        """Enforce the no-silent-API-billing rule before invoking the CLI."""
-        if not self.strip_api_keys:
-            return
-        # Strip provider API keys from THIS process env so run_provider (which
-        # copies os.environ for the child) cannot leak them into the CLI.
-        for var in _API_KEY_ENV_VARS.get(self.provider, ()):  # noqa: B007
-            os.environ.pop(var, None)
-
     async def generate(self, task: TaskSpec, ctx: AgentContext) -> Artifact:
         from ..providers import ProviderError, run_provider
 
@@ -76,7 +56,6 @@ class CliBackend:
                 f"provider CLI not available: {self.provider} "
                 f"(install it and run its official login flow)"
             )
-        self._guard_byo_auth()
         prompt = ctx.effective_prompt(task)
         try:
             result = await asyncio.to_thread(
@@ -86,6 +65,7 @@ class CliBackend:
                 self.repo,
                 self.model,
                 self.timeout_sec,
+                allow_api_keys=not self.strip_api_keys,
             )
         except ProviderError as exc:
             raise BackendError(f"{self.provider} CLI failed: {exc}") from exc

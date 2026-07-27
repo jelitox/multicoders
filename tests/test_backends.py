@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
-
 import pytest
 
 from multicoders.backends import (
@@ -77,14 +75,6 @@ def test_cli_backend_unavailable_when_binary_missing():
     assert asyncio.run(backend.health()) is False
     with pytest.raises(BackendUnavailable):
         asyncio.run(backend.generate(TaskSpec(prompt="x"), AgentContext()))
-
-
-def test_cli_backend_strips_api_keys_byo_auth(monkeypatch):
-    # HARD CONSTRAINT: never let a provider API key reach the official CLI.
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-be-stripped")
-    backend = CliBackend("claude")
-    backend._guard_byo_auth()
-    assert "ANTHROPIC_API_KEY" not in os.environ
 
 
 def test_api_backend_is_billed_and_others_are_not():
