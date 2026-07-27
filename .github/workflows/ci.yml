@@ -16,14 +16,17 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.11'
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -e .
+        python -m pip install "uv>=0.9,<0.10"
+        uv pip install --system \
+          -e ./_refs/ai-parrot/packages/ai-parrot \
+          -e "./_refs/ai-parrot/packages/ai-parrot-tools[git,docker,sandbox,codeinterpreter,db]" \
+          "pytest>=8"
+        uv pip install --system --no-deps -e .
     - name: Run tests
-      run: |
-        python -m unittest discover -s tests -v
+      run: python -m pytest -q
     - name: Dry run smoke test
       run: |
         python -m multicoders --dry-run "Hello World test"
