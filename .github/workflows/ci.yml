@@ -36,4 +36,4 @@ jobs:
       run: python -m pytest -q
     - name: Dry run smoke test
       run: |
-        python -m multicoders --dry-run "Hello World test"
+        python -m multicoders arena --dry-run "Hello World test"
