@@ -7,6 +7,8 @@ from .dispatcher import Dispatcher
 from .arena import Arena
 from .qa import QANode
 from .research import ResearchNode
+from .advisory import AdvisoryRequest, run_advisory
+from .mockups import MockupRequest, run_mockup
 
 __version__ = "0.1.0"
 
@@ -23,4 +25,8 @@ __all__ = [
     "Arena",
     "QANode",
     "ResearchNode",
+    "AdvisoryRequest",
+    "run_advisory",
+    "MockupRequest",
+    "run_mockup",
 ]

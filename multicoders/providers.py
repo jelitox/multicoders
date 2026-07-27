@@ -3,13 +3,28 @@ from __future__ import annotations
 import dataclasses
 import datetime as _dt
 import json
+import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
+from collections.abc import Mapping, Sequence
 
 
 DEFAULT_PROVIDER_COOLDOWN_SEC = 3600
+
+# Official provider CLIs may switch to pay-per-token API billing when these
+# variables are present. Subscription/BYO-auth runs filter them from the child
+# environment only; the coordinator process is never mutated.
+PROVIDER_API_KEY_ENV_VARS: dict[str, tuple[str, ...]] = {
+    "claude": ("ANTHROPIC_API_KEY",),
+    "codex": ("OPENAI_API_KEY",),
+    "gemini": (
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+    ),
+}
 
 
 _PROVIDER_ERROR_SUMMARY_LIMIT = 240
@@ -361,6 +376,12 @@ def run_provider(
     model: str | None,
     timeout_sec: int,
     cooldown_sec: int = DEFAULT_PROVIDER_COOLDOWN_SEC,
+    *,
+    sandbox_mode: str | None = None,
+    images: Sequence[Path] = (),
+    output_file: Path | None = None,
+    resume: bool = False,
+    allow_api_keys: bool = False,
 ) -> ProviderResult:
     spec = PROVIDER_SPECS.get(provider_name)
     if spec is None:
@@ -374,10 +395,17 @@ def run_provider(
         prompt=prompt,
         model=model,
         supports_model=spec.supports_model,
+        sandbox_mode=sandbox_mode,
+        images=images,
+        output_file=output_file,
+        resume=resume,
     )
 
-    import os
-    env = dict(os.environ)
+    env = provider_environment(
+        provider_name,
+        inherited=os.environ,
+        allow_api_keys=allow_api_keys,
+    )
     if provider_name == "gemini":
         env["GEMINI_TELEMETRY_ENABLED"] = "false"
         env["GEMINI_TELEMETRY_LOG_PROMPTS"] = "false"
@@ -435,15 +463,82 @@ def build_provider_command(
     prompt: str,
     model: str | None,
     supports_model: bool,
+    sandbox_mode: str | None = None,
+    images: Sequence[Path] = (),
+    output_file: Path | None = None,
+    resume: bool = False,
 ) -> list[str]:
+    if resume and provider_name != "codex":
+        raise ProviderError(f"session resume is not supported for {provider_name}")
+    if images and provider_name != "codex":
+        raise ProviderError(f"image attachments are not supported for {provider_name}")
+    if output_file is not None and provider_name != "codex":
+        raise ProviderError(f"output files are not supported for {provider_name}")
+
+    if provider_name == "codex" and resume:
+        command = ["codex", "exec", "resume", "--last"]
+        if sandbox_mode:
+            command.extend(["-c", f'sandbox_mode="{sandbox_mode}"'])
+        for image in images:
+            command.extend(["-i", str(image)])
+        if output_file is not None:
+            command.extend(["-o", str(output_file)])
+        command.append(prompt)
+        return command
+
     command = list(base_command)
+    if sandbox_mode:
+        if provider_name == "codex":
+            _replace_option(command, "--sandbox", sandbox_mode)
+        elif provider_name == "claude":
+            _replace_option(
+                command,
+                "--permission-mode",
+                "plan" if sandbox_mode == "read-only" else "acceptEdits",
+            )
+        elif provider_name == "gemini":
+            _replace_option(
+                command,
+                "--approval-mode",
+                "plan" if sandbox_mode == "read-only" else "auto_edit",
+            )
     if model and supports_model:
         command.extend(["--model", model])
+    for image in images:
+        command.extend(["-i", str(image)])
+    if output_file is not None:
+        command.extend(["-o", str(output_file)])
     if provider_name == "gemini":
         command.extend(["--prompt", prompt])
     else:
         command.append(prompt)
     return command
+
+
+def provider_environment(
+    provider_name: str,
+    *,
+    inherited: Mapping[str, str] | None = None,
+    allow_api_keys: bool = False,
+) -> dict[str, str]:
+    """Build an isolated child environment for an official provider CLI."""
+    env = dict(os.environ if inherited is None else inherited)
+    if not allow_api_keys:
+        for variable in PROVIDER_API_KEY_ENV_VARS.get(provider_name, ()):
+            env.pop(variable, None)
+    return env
+
+
+def _replace_option(command: list[str], option: str, value: str) -> None:
+    try:
+        index = command.index(option)
+    except ValueError:
+        command.extend([option, value])
+        return
+    if index + 1 == len(command):
+        command.append(value)
+    else:
+        command[index + 1] = value
 
 
 def _timeout_output(value: object) -> str:

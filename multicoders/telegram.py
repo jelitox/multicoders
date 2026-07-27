@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
 MAX_TELEGRAM_MESSAGE_LENGTH = 4096
 MAX_TELEGRAM_CAPTION_LENGTH = 1024
+MAX_TELEGRAM_PHOTO_BYTES = 10 * 1024 * 1024
 
 
 def split_telegram_text(text: str, max_length: int = MAX_TELEGRAM_MESSAGE_LENGTH) -> list[str]:
@@ -108,6 +112,69 @@ class TelegramBot:
             raise TelegramError(f"Telegram rejected {method} for {self.name}: {result}")
         return result
 
+    def _call_api_multipart(
+        self,
+        method: str,
+        payload: dict[str, object],
+        *,
+        field_name: str,
+        file_path: Path,
+    ) -> dict[str, object]:
+        boundary = f"multicoders-{uuid.uuid4().hex}"
+        chunks: list[bytes] = []
+        for key, value in payload.items():
+            chunks.extend(
+                [
+                    f"--{boundary}\r\n".encode(),
+                    (
+                        f'Content-Disposition: form-data; name="{key}"\r\n\r\n'
+                    ).encode(),
+                    str(value).encode("utf-8"),
+                    b"\r\n",
+                ]
+            )
+        media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode(),
+                (
+                    f'Content-Disposition: form-data; name="{field_name}"; '
+                    f'filename="{file_path.name}"\r\n'
+                ).encode(),
+                f"Content-Type: {media_type}\r\n\r\n".encode(),
+                file_path.read_bytes(),
+                b"\r\n",
+                f"--{boundary}--\r\n".encode(),
+            ]
+        )
+        url = f"https://api.telegram.org/bot{self.token}/{method}"
+        request = urllib.request.Request(
+            url,
+            data=b"".join(chunks),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=35) as response:
+                raw = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            details = exc.read().decode("utf-8", "replace").strip()
+            raise TelegramError(
+                f"Telegram API call failed for {self.name}: {method} "
+                f"(HTTP {exc.code}) {details or exc.reason}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise TelegramError(
+                f"Telegram API call failed for {self.name}: {method} ({exc.reason})"
+            ) from exc
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise TelegramError(f"Telegram returned invalid JSON for {self.name}") from exc
+        if not result.get("ok"):
+            raise TelegramError(f"Telegram rejected {method} for {self.name}: {result}")
+        return result
+
     def send_message(self, text: str) -> None:
         for chunk in split_telegram_text(text):
             payload: dict[str, object] = {
@@ -119,16 +186,29 @@ class TelegramBot:
                 payload["message_thread_id"] = self.message_thread_id
             self._call_api("sendMessage", payload)
 
-    def send_photo(self, photo: str, caption: str | None = None) -> None:
+    def send_photo(self, photo: str | Path, caption: str | None = None) -> None:
         payload: dict[str, object] = {
             "chat_id": self.chat_id,
-            "photo": photo,
         }
         trimmed_caption = trim_telegram_caption(caption)
         if trimmed_caption is not None:
             payload["caption"] = trimmed_caption
         if self.message_thread_id is not None:
             payload["message_thread_id"] = self.message_thread_id
+        if isinstance(photo, Path):
+            if not photo.is_file() or photo.is_symlink():
+                raise TelegramError(f"local photo is not a regular file: {photo}")
+            if photo.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+                raise TelegramError(f"unsupported local photo type: {photo.suffix}")
+            if photo.stat().st_size > MAX_TELEGRAM_PHOTO_BYTES:
+                raise TelegramError(
+                    f"local photo exceeds {MAX_TELEGRAM_PHOTO_BYTES} bytes"
+                )
+            self._call_api_multipart(
+                "sendPhoto", payload, field_name="photo", file_path=photo
+            )
+            return
+        payload["photo"] = photo
         self._call_api("sendPhoto", payload)
 
     def send_animation(self, animation: str, caption: str | None = None) -> None:

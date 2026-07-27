@@ -140,6 +140,44 @@ class TelegramBotTests(unittest.TestCase):
         for _, payload in captured:
             self.assertEqual(payload["message_thread_id"], "77")
 
+    def test_send_photo_uploads_local_png_as_multipart(self) -> None:
+        captured: list[object] = []
+
+        def fake_urlopen(request, timeout=0):
+            captured.append(request)
+            return _FakeResponse()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            photo = Path(tmp) / "mockup.png"
+            photo.write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+            bot = TelegramBot(
+                name="codex",
+                token="token-codex",
+                chat_id="-100123",
+                message_thread_id=77,
+            )
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                bot.send_photo(photo, caption="mockup")
+
+        request = captured[0]
+        self.assertTrue(request.headers["Content-type"].startswith("multipart/form-data"))
+        assert request.data is not None
+        self.assertIn(b'filename="mockup.png"', request.data)
+        self.assertIn(b"\x89PNG\r\n\x1a\nfixture", request.data)
+        self.assertIn(b'name="message_thread_id"', request.data)
+
+    def test_send_photo_rejects_oversize_before_network(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            photo = Path(tmp) / "too-big.png"
+            photo.write_bytes(b"x")
+            bot = TelegramBot(name="codex", token="token-codex", chat_id="-100123")
+            with patch(
+                "multicoders.telegram.MAX_TELEGRAM_PHOTO_BYTES", 0
+            ), patch("urllib.request.urlopen") as urlopen:
+                with self.assertRaises(Exception):
+                    bot.send_photo(photo)
+                urlopen.assert_not_called()
+
     def test_chat_response_redacts_secret_before_telegram_message(self) -> None:
         bot = _FakeBot()
         agent = AgentConfig(provider="gemini", display_name="Gemini", model="gemini-test", bot=bot)

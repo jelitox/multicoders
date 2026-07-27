@@ -109,6 +109,28 @@ uniformly. Variants:
 Resolution (`resolver.py`) honours an explicit order + capability + health and
 never auto-inserts a billed backend.
 
+## Independent advisory and visual artifacts
+
+`multicoders.advisory` adds a two-phase runtime beside the implementation
+council. Phase A uses a thread pool to start every configured provider with the
+same neutral, content-hashed brief and read-only sandbox. Phase B receives the
+immutable outputs only after all futures close, then preserves agreements,
+divergences and unique findings. Quorum failure is `needs_human`, not a partial
+consensus.
+
+`multicoders.mockups` is the narrowly scoped writable workflow. It copies a
+validated screenshot into a caller-owned artifact directory, attaches it to
+Codex image generation, writes only under `outputs/`, validates exact named
+PNGs and emits a manifest. Resume uses Codex's sandbox configuration override.
+
+The `perspective` and `mockup` commands form a versioned JSON boundary for
+Hornero. Multicoders owns provider processes; Hornero owns specs, decisions,
+budgets, ledger records and semantic lineage.
+
+Provider child environments are isolated. Official CLI runs strip API billing
+keys from a copied environment and never mutate the parent process. Telegram
+can upload validated local PNG/JPEG artifacts using multipart form data.
+
 ## Layered Memory (`multicoders/memory/`)
 
 `MemoryService` turns "single storage" into a memory stack. The SQLite ledger

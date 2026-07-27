@@ -23,6 +23,7 @@ import sys
 # Subcommands routed to the deterministic Parrot arena engine (cli.py).
 ARENA_COMMANDS = {"arena"}
 HORNERO_COMMANDS = {"hornero"}
+PROTOCOL_COMMANDS = {"perspective", "mockup"}
 
 
 def _print_top_help() -> None:
@@ -32,6 +33,8 @@ def _print_top_help() -> None:
     print("  multicoders run --repo PATH --task '...'")
     print("  multicoders service --db-file ... --telegram-state-file ...")
     print("  multicoders brainstorming --repo PATH --topic '...'")
+    print("  multicoders perspective --request request.json --repo PATH")
+    print("  multicoders mockup --request request.json --repo PATH --artifact-dir DIR")
     print("  multicoders send-test-messages | discover-telegram-chat")
     print()
     print("Deterministic Parrot arena engine (in-process):")
@@ -62,6 +65,11 @@ def main(argv: list[str] | None = None) -> int:
         from .hornero import main as hornero_main
 
         return hornero_main(argv[1:])
+
+    if argv[0] in PROTOCOL_COMMANDS:
+        from .protocol_cli import main as protocol_main
+
+        return protocol_main(argv[0], argv[1:])
 
     from .app import main as council_main
 

@@ -16,6 +16,10 @@ keeping a dry-run path available for local validation without LLM calls.
   and pytest checks for candidate worktrees.
 - Stores tasks, artifacts, verdicts, and checkpoints in SQLite.
 - Supports a CLI dry-run mode that does not require provider API keys.
+- Runs independent Codex/Claude/Gemini advisory perspectives concurrently,
+  with a neutral first-pass brief, quorum and deterministic synthesis.
+- Generates screenshot-grounded Codex image mockups in isolated artifact
+  directories and validates every declared PNG.
 - Integrates local `ai-parrot` and `ai-parrot-tools` from `_refs/`.
 
 ## Local Setup
@@ -122,6 +126,22 @@ Resume a stored task:
 .venv/bin/python -m multicoders service --db-file service.db --telegram-state-file state.json
 ```
 
+### Independent advisory and mockup protocols
+
+```bash
+.venv/bin/python -m multicoders perspective \
+  --request advisory-request.json --repo /path/to/repo --output result.json
+
+.venv/bin/python -m multicoders mockup \
+  --request mockup-request.json --repo /path/to/repo \
+  --artifact-dir /path/to/repo/.multicoders/mockups/run-1 \
+  --output result.json
+```
+
+Both commands support `--dry-run`. See
+[Independent perspectives and grounded mockups](docs/ADVISORY_MOCKUPS.md) for
+the JSON contracts, billing boundary, sandboxing and Telegram delivery.
+
 ## Main Modules
 
 - `multicoders/cli.py`: supported CLI implementation.
@@ -134,6 +154,10 @@ Resume a stored task:
 - `multicoders/qa.py`: security, syntax, doctest, and pytest validation.
 - `multicoders/research.py`: local context enrichment and Parrot API lens.
 - `multicoders/storage.py`: SQLite persistence and checkpointing.
+- `multicoders/advisory.py`: concurrent independent perspectives, quorum,
+  synthesis and dispositions.
+- `multicoders/mockups.py`: grounded Codex image artifacts and PNG validation.
+- `multicoders/protocol_cli.py`: machine-readable Hornero integration.
 
 ## Validation
 

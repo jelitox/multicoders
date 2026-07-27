@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import unittest
 import unittest.mock
+from pathlib import Path
 
-from multicoders.providers import PROVIDER_SPECS, ProviderResult, build_provider_command, extract_json_object, extract_text_output
+from multicoders.providers import (
+    PROVIDER_SPECS,
+    ProviderResult,
+    build_provider_command,
+    extract_json_object,
+    extract_text_output,
+    provider_environment,
+)
 
 
 class ProviderCommandTests(unittest.TestCase):
@@ -41,6 +49,64 @@ class ProviderCommandTests(unittest.TestCase):
         )
         self.assertEqual(command[-1], "hello world")
         self.assertEqual(command[:-1], PROVIDER_SPECS["claude"].command)
+
+    def test_advisory_commands_are_read_only(self) -> None:
+        codex = build_provider_command(
+            provider_name="codex",
+            base_command=PROVIDER_SPECS["codex"].command,
+            prompt="review",
+            model=None,
+            supports_model=True,
+            sandbox_mode="read-only",
+        )
+        self.assertEqual(codex[codex.index("--sandbox") + 1], "read-only")
+        claude = build_provider_command(
+            provider_name="claude",
+            base_command=PROVIDER_SPECS["claude"].command,
+            prompt="review",
+            model=None,
+            supports_model=True,
+            sandbox_mode="read-only",
+        )
+        self.assertEqual(claude[claude.index("--permission-mode") + 1], "plan")
+
+    def test_codex_mockup_and_resume_commands(self) -> None:
+        screenshot = Path("/tmp/screen.png")
+        output = Path("/tmp/result.txt")
+        fresh = build_provider_command(
+            provider_name="codex",
+            base_command=PROVIDER_SPECS["codex"].command,
+            prompt="generate",
+            model=None,
+            supports_model=True,
+            sandbox_mode="workspace-write",
+            images=[screenshot],
+            output_file=output,
+        )
+        self.assertIn("-i", fresh)
+        self.assertIn("-o", fresh)
+        resumed = build_provider_command(
+            provider_name="codex",
+            base_command=PROVIDER_SPECS["codex"].command,
+            prompt="refine",
+            model=None,
+            supports_model=True,
+            sandbox_mode="workspace-write",
+            resume=True,
+        )
+        self.assertEqual(resumed[:4], ["codex", "exec", "resume", "--last"])
+        self.assertIn('sandbox_mode="workspace-write"', resumed)
+
+    def test_provider_environment_filters_child_only(self) -> None:
+        inherited = {
+            "PATH": "/bin",
+            "OPENAI_API_KEY": "secret",
+            "UNRELATED": "kept",
+        }
+        child = provider_environment("codex", inherited=inherited)
+        self.assertNotIn("OPENAI_API_KEY", child)
+        self.assertEqual(child["UNRELATED"], "kept")
+        self.assertIn("OPENAI_API_KEY", inherited)
 
     def test_extract_json_object_from_fenced_block(self) -> None:
         payload = extract_json_object("prefix\n```json\n{\"solution_id\":\"x\",\"summary\":\"y\"}\n```\nsuffix")
