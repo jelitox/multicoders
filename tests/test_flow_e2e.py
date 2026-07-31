@@ -101,11 +101,9 @@ def test_no_autovote_then_rejected_when_judge_disapproves() -> None:
 
 
 def test_parrot_dependency_importable() -> None:
-    """We declared ai-parrot as a dependency; smoke-import the public
-    flow surface so a missing/broken install fails fast."""
-    from parrot.bots.flow import (  # noqa: F401
-        AgentsFlow,
-        DecisionFlowNode,
-        DecisionMode,
-        FlowNode,
-    )
+    """Smoke-import the current Parrot surfaces consumed by Multicoders."""
+    from parrot.bots.agent import BasicAgent
+    from parrot.knowledge.pageindex import PageIndexToolkit
+    from parrot_tools.graphindex import GraphIndexToolkit
+
+    assert BasicAgent and PageIndexToolkit and GraphIndexToolkit

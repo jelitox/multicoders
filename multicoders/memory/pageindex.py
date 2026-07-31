@@ -1,12 +1,9 @@
 """Documental/code memory backed by Parrot PageIndex (Fase 4b).
 
-Feature-detected: the pinned ``ai-parrot`` (commit 271aba90) does NOT ship
-``parrot.knowledge.pageindex`` — it arrives in a newer version (FEAT-198). This
-layer therefore probes for the module at construction time and reports
-``available() == False`` when it is missing, so the rest of Multicoders keeps
-working unchanged. Once the submodule is bumped, the same layer activates
-automatically and grounds research via ``retrieve()`` instead of an ``os.walk``
-file-list dump.
+The pinned ``ai-parrot`` release ships ``parrot.knowledge.pageindex``. This
+layer still probes for the module at construction time so stripped or partial
+installations degrade safely instead of breaking Multicoders. When present it
+grounds research via ``retrieve()`` instead of an ``os.walk`` file-list dump.
 
 The module import path is the post-FEAT-198 one:
 ``from parrot.knowledge.pageindex import PageIndexToolkit``.

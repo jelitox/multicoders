@@ -143,9 +143,11 @@ stays transactional; context and learning live in layers:
 - documents — `PageIndexDocumentMemory`, grounds research via `retrieve()`
   instead of the `os.walk` file dump (Fase 4b).
 
-The PageIndex/GraphIndex layers are feature-detected: they report
-`available() == False` on the current ai-parrot pin and activate automatically
-once the submodule is bumped (the pin lacks `parrot.knowledge.pageindex/graphindex`).
+The PageIndex/GraphIndex layers are active on the ai-parrot `0.25.29` pin. They
+remain feature-detected so a deliberately stripped installation degrades to
+local retrieval instead of failing at import time. Parrot's server satellite is
+installed alongside core because current `BasicAgent` MCP transports live in
+`ai-parrot-server`.
 
 ## Domain Profiles (`multicoders/domains/`)
 

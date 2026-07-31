@@ -37,6 +37,7 @@ The project uses local Parrot sources through `tool.uv.sources` in
 `pyproject.toml`, so the editable install resolves:
 
 - `_refs/ai-parrot/packages/ai-parrot`
+- `_refs/ai-parrot/packages/ai-parrot-server`
 - `_refs/ai-parrot/packages/ai-parrot-tools`
 
 `ai-parrot` also expects NavConfig environment assets. For local development,

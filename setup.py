@@ -11,7 +11,8 @@ setup(
     version="0.1.0",
     packages=find_packages(),
     install_requires=[
-        f"ai-parrot @ {(PARROT_ROOT / 'ai-parrot').as_uri()}",
+        f"ai-parrot[graphindex,server] @ {(PARROT_ROOT / 'ai-parrot').as_uri()}",
+        f"ai-parrot-server[all] @ {(PARROT_ROOT / 'ai-parrot-server').as_uri()}",
         f"ai-parrot-tools @ {(PARROT_ROOT / 'ai-parrot-tools').as_uri()}",
         "nest-asyncio>=1.6.0",
     ],
