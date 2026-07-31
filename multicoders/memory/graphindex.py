@@ -1,8 +1,8 @@
 """Episodic/semantic memory backed by Parrot GraphIndex (Fase 4b).
 
 Feature-detected like :mod:`multicoders.memory.pageindex`: the pinned ai-parrot
-lacks ``parrot.knowledge.graphindex`` (it targets FEAT-190/191). Until the
-submodule is bumped, this layer transparently delegates recall to a fallback
+release includes GraphIndex and its runtime extra. If an installation omits
+that extra, this layer transparently delegates recall to a fallback
 :class:`DecisionMemoryLayer` (the Fase 4a JSON store), so behaviour degrades to
 keyword recall instead of breaking.
 

@@ -23,7 +23,8 @@ jobs:
       run: |
         python -m pip install "uv>=0.9,<0.10"
         uv pip install --system \
-          -e ./_refs/ai-parrot/packages/ai-parrot \
+          -e "./_refs/ai-parrot/packages/ai-parrot[graphindex]" \
+          -e "./_refs/ai-parrot/packages/ai-parrot-server[all]" \
           -e "./_refs/ai-parrot/packages/ai-parrot-tools[git,docker,sandbox,codeinterpreter,db]" \
           "pytest>=8"
         uv pip install --system --no-deps -e .

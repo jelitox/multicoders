@@ -6,7 +6,7 @@ authors = [
     { name = "Jelitox", email = "jelitox@example.com" }
 ]
 dependencies = [
-    "ai-parrot",
+    "ai-parrot[graphindex,server]",
     "ai-parrot-tools[git,docker,sandbox,codeinterpreter,db]",
     "nest-asyncio>=1.6.0",
 ]
@@ -33,4 +33,5 @@ norecursedirs = ["_refs", ".git", ".venv"]
 
 [tool.uv.sources]
 ai-parrot = { path = "_refs/ai-parrot/packages/ai-parrot", editable = true }
+ai-parrot-server = { path = "_refs/ai-parrot/packages/ai-parrot-server", editable = true }
 ai-parrot-tools = { path = "_refs/ai-parrot/packages/ai-parrot-tools", editable = true }

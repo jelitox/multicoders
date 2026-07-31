@@ -1,9 +1,4 @@
-"""Fase 4b: PageIndex/GraphIndex layers — feature detection + wiring.
-
-The pinned ai-parrot lacks these modules, so these tests cover the
-graceful-degradation path and the wiring against injected fakes (proving the
-layers activate correctly once the submodule is bumped).
-"""
+"""Fase 4b: PageIndex/GraphIndex layers — activation and fallback wiring."""
 from __future__ import annotations
 
 import os
@@ -18,6 +13,13 @@ from multicoders.memory import (
 )
 from multicoders.research import ResearchNode
 from multicoders.storage import Storage
+from multicoders.memory.graphindex import graphindex_available
+from multicoders.memory.pageindex import pageindex_available
+
+
+def test_current_parrot_knowledge_layers_are_available():
+    assert pageindex_available() is True
+    assert graphindex_available() is True
 
 
 def test_pageindex_inert_without_toolkit():
